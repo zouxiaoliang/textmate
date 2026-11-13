@@ -1,5 +1,6 @@
 #include "ct.h"
 #include "render.h"
+#include <algorithm>
 #include <cf/cf.h>
 #include <text/utf8.h>
 #include <text/utf16.h>
@@ -196,12 +197,11 @@ namespace ct
 				switch(text[i])
 				{
 					case ' ':
-						_space_locations.push_back(i);
+						_space_markers.emplace_back(i, j);
 					break;
 
 					case '\t':
-						j += utf16::distance(text.data() + (_tab_locations.empty() ? 0 : _tab_locations.back()), text.data() + i);
-
+					{
 						CGFloat x = CTLineGetOffsetForStringIndex(_line.get(), j, nullptr);
 						CGFloat newX = (x - standardTabWidths + newTabWidths);
 						CGFloat stopLocation = (floor(newX / tabWidth)+1) * tabWidth;
@@ -210,9 +210,14 @@ namespace ct
 						newTabWidths += stopLocation - newX;
 						standardTabWidths += CTLineGetOffsetForStringIndex(_line.get(), j+1, nullptr) - x;
 						tabs.push_back(CTTextTabCreate(kCTTextAlignmentNatural, stopLocation, nullptr));
-						_tab_locations.push_back(i);
+						_tab_markers.emplace_back(i, j);
+					}
 					break;
 				}
+
+				// Track the UTF-16 index corresponding to byte offset i (1 unit for a lead byte of a
+				// 1–3 byte sequence, 2 for a 4 byte sequence, 0 for a continuation byte).
+				j += (text[i] & 0xC0) != 0x80 ? ((text[i] & 0xF8) != 0xF0 ? 1 : 2) : 0;
 			}
 
 			if(!tabs.empty())
@@ -236,11 +241,21 @@ namespace ct
 
 			CFRelease(toDraw);
 		}
+
+		// Cache the typographic bounds: callers (e.g. paragraph_t::softlines) query the width of
+		// every node on every frame, and CTLineGetTypographicBounds is not free.
+		if(_line)
+			_width = CTLineGetTypographicBounds(_line.get(), &_ascent, &_descent, &_leading);
 	}
 
 	CGFloat line_t::width (CGFloat* ascent, CGFloat* descent, CGFloat* leading) const
 	{
-		return _line ? CTLineGetTypographicBounds(_line.get(), ascent, descent, leading) : 0;
+		if(!_line)
+			return 0;
+		if(ascent)  *ascent  = _ascent;
+		if(descent) *descent = _descent;
+		if(leading) *leading = _leading;
+		return _width;
 	}
 
 	size_t line_t::index_for_offset (CGFloat offset) const
@@ -266,8 +281,91 @@ namespace ct
 		}
 	}
 
-	void line_t::draw_invisible (std::vector<size_t> locations, CGPoint pos, std::string const& text, styles_t const& styles, ng::context_t const& context, bool isFlipped) const
+	// Computing the offset for a marker via CTLineGetOffsetForStringIndex is O(line length) since
+	// CoreText scans the line’s caret offsets on every call. The CTLine is immutable once
+	// constructed, so we compute each marker’s offsets once (on first draw) and cache them. This
+	// matters for long lines where draw_invisible runs every frame.
+	void line_t::cache_marker_offsets () const
 	{
+		if(_marker_offsets_cached || !_line)
+			return;
+		_marker_offsets_cached = true;
+
+		bool hasRightToLeft = false;
+		if(CFArrayRef runs = CTLineGetGlyphRuns(_line.get()))
+		{
+			for(CFIndex i = 0; i < CFArrayGetCount(runs); ++i)
+			{
+				if(CTRunGetStatus((CTRunRef)CFArrayGetValueAtIndex(runs, i)) & kCTRunStatusRightToLeft)
+				{
+					hasRightToLeft = true;
+					break;
+				}
+			}
+		}
+
+		if(!hasRightToLeft)
+		{
+			// With no right-to-left runs, string indices ascend across the (visually ordered) glyph
+			// runs, so one pass over the glyph runs yields the exact offset of every space — one
+			// CTLineGetOffsetForStringIndex call per marker would each scan the whole line. Tab
+			// markers still go through offset_for_index since their position depends on tab stops.
+			struct glyph_t { CFIndex index; CGFloat x; };
+			std::vector<glyph_t> glyphs;
+			if(CFArrayRef runs = CTLineGetGlyphRuns(_line.get()))
+			{
+				for(CFIndex i = 0; i < CFArrayGetCount(runs); ++i)
+				{
+					CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, i);
+					CFIndex count = CTRunGetGlyphCount(run);
+					if(count == 0)
+						continue;
+
+					std::vector<CFIndex> indices(count);
+					std::vector<CGPoint> positions(count);
+					CTRunGetStringIndices(run, CFRangeMake(0, 0), indices.data());
+					CTRunGetPositions(run, CFRangeMake(0, 0), positions.data());
+					for(CFIndex g = 0; g < count; ++g)
+						glyphs.push_back({ indices[g], positions[g].x });
+				}
+			}
+
+			for(auto& marker : _space_markers)
+			{
+				auto it = std::lower_bound(glyphs.begin(), glyphs.end(), marker.utf16Index, [](glyph_t const& g, CFIndex index) { return g.index < index; });
+				if(it != glyphs.begin() && (it == glyphs.end() || it->index > marker.utf16Index))
+					--it; // The marker is covered by the preceding glyph (e.g. inside a ligature)
+				if(it != glyphs.end())
+				{
+					marker.x1 = it->x;
+					marker.x2 = marker.x1 + 1;
+				}
+			}
+		}
+
+		for(auto& marker : _tab_markers)
+		{
+			marker.x1 = offset_for_index(marker.location);
+			marker.x2 = hasRightToLeft ? offset_for_index(marker.location + 1) : marker.x1 + 1;
+		}
+
+		if(hasRightToLeft)
+		{
+			for(auto& marker : _space_markers)
+			{
+				marker.x1 = offset_for_index(marker.location);
+				marker.x2 = offset_for_index(marker.location + 1);
+			}
+		}
+	}
+
+	void line_t::draw_invisible (std::vector<marker_t> const& markers, CGPoint pos, std::string const& text, styles_t const& styles, ng::context_t const& context, bool isFlipped, CGRect visibleRect) const
+	{
+		if(markers.empty())
+			return;
+
+		cache_marker_offsets();
+
 		CFMutableAttributedStringRef str = CFAttributedStringCreateMutable(kCFAllocatorDefault, 0);
 		CFAttributedStringReplaceString(str, CFRangeMake(0, 0), cf::wrap(text));
 		CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTFontAttributeName, styles.font());
@@ -278,14 +376,23 @@ namespace ct
 		if(isFlipped)
 			CGContextConcatCTM(context, CGAffineTransformMake(1, 0, 0, -1, 0, 2 * pos.y));
 
-		for(auto const& location : locations)
+		CGFloat const xMin = CGRectGetMinX(visibleRect) - pos.x;
+		CGFloat const xMax = CGRectGetMaxX(visibleRect);
+		CGFloat const markerWidth = CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr);
+		for(auto const& marker : markers)
 		{
-			if(location > 5000)
+			if(marker.location > 5000)
 				break;
 
-			CGFloat x1 = round(pos.x + offset_for_index(location));
-			CGFloat x2 = round(pos.x + offset_for_index(location+1));
-			CGFloat x = x2 < x1 ? x1 - CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr) : x1;
+			if(marker.x1 < xMin)
+				continue;
+
+			CGFloat x1 = round(pos.x + marker.x1);
+			if(x1 > xMax)
+				continue;
+
+			CGFloat x2 = round(pos.x + marker.x2);
+			CGFloat x = x2 < x1 ? x1 - markerWidth : x1;
 			CGContextSetTextPosition(context, x, pos.y);
 			CTLineDraw(line, context);
 		}
@@ -293,15 +400,15 @@ namespace ct
 		CFRelease(line);
 	}
 
-	void line_t::draw_foreground (CGPoint pos, ng::context_t const& context, bool isFlipped, std::vector< std::pair<size_t, size_t> > const& misspelled, theme_ptr const& theme) const
+	void line_t::draw_foreground (CGPoint pos, ng::context_t const& context, bool isFlipped, std::vector< std::pair<size_t, size_t> > const& misspelled, theme_ptr const& theme, CGRect visibleRect) const
 	{
 		if(!_line)
 			return;
 
-		if(context.space() != "")
-			draw_invisible(_space_locations, pos, context.space(), theme->styles_for_scope("deco.invisible.space"), context, isFlipped);
-		if(context.tab() != "")
-			draw_invisible(_tab_locations, pos, context.tab(), theme->styles_for_scope("deco.invisible.tab"), context, isFlipped);
+		if(context.space() != "" && !_space_markers.empty())
+			draw_invisible(_space_markers, pos, context.space(), theme->styles_for_scope("deco.invisible.space"), context, isFlipped, visibleRect);
+		if(context.tab() != "" && !_tab_markers.empty())
+			draw_invisible(_tab_markers, pos, context.tab(), theme->styles_for_scope("deco.invisible.tab"), context, isFlipped, visibleRect);
 
 		for(auto const& pair : _underlines) // Draw our own underline since CoreText does an awful job <rdar://5845224>
 		{

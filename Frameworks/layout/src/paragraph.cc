@@ -180,7 +180,7 @@ namespace ng
 	void paragraph_t::node_t::draw_foreground (theme_ptr const& theme, ng::context_t const& context, bool isFlipped, CGRect visibleRect, ng::buffer_t const& buffer, size_t bufferOffset, std::vector< std::pair<size_t, size_t> > const& misspelled, CGPoint anchor, CGFloat baseline) const
 	{
 		if(_line)
-			_line->draw_foreground(CGPointMake(anchor.x, anchor.y + baseline), context, isFlipped, misspelled, theme);
+			_line->draw_foreground(CGPointMake(anchor.x, anchor.y + baseline), context, isFlipped, misspelled, theme, visibleRect);
 
 		if(_type != kNodeTypeNewline || context.newline().size())
 		{
@@ -726,11 +726,23 @@ namespace ng
 		auto lines = softlines(metrics);
 		for(size_t i = 0; i < lines.size(); ++i)
 		{
+			// Skip softlines entirely outside the visible rect (relevant when soft wrapping splits a very
+			// long line into thousands of softlines).
+			CGFloat const lineTop = anchor.y + lines[i].y;
+			if(lineTop >= CGRectGetMaxY(visibleRect) || lineTop + lines[i].height <= CGRectGetMinY(visibleRect))
+				continue;
+
 			CGFloat x = lines[i].x;
 			size_t offset = lines[i].offset;
 			foreach(node, _nodes.begin() + lines[i].first, _nodes.begin() + lines[i].last)
 			{
-				node->draw_background(theme, context, isFlipped, visibleRect, backgroundColor, buffer, bufferOffset + offset, CGPointMake(anchor.x + x, anchor.y + lines[i].y), lines[i].height);
+				// Nodes are laid out left to right, so we can stop at the right edge of the visible rect.
+				// This matters for lines much wider than the viewport, e.g. minified JSON: only the one or
+				// two nodes intersecting the viewport get drawn.
+				if(anchor.x + x >= CGRectGetMaxX(visibleRect))
+					break;
+				if(anchor.x + x + node->width() > CGRectGetMinX(visibleRect))
+					node->draw_background(theme, context, isFlipped, visibleRect, backgroundColor, buffer, bufferOffset + offset, CGPointMake(anchor.x + x, anchor.y + lines[i].y), lines[i].height);
 				x += node->width();
 				offset += node->length();
 			}
@@ -744,32 +756,45 @@ namespace ng
 		auto lines = softlines(metrics, false);
 		for(size_t i = 0; i < lines.size(); ++i)
 		{
+			// Skip softlines entirely outside the visible rect (see draw_background).
+			CGFloat const lineTop = anchor.y + lines[i].y;
+			if(lineTop >= CGRectGetMaxY(visibleRect) || lineTop + lines[i].height <= CGRectGetMinY(visibleRect))
+				continue;
+
 			CGFloat x = lines[i].x;
 			size_t offset = bufferOffset + lines[i].offset;
 			foreach(node, _nodes.begin() + lines[i].first, _nodes.begin() + lines[i].last)
 			{
-				std::vector< std::pair<size_t, size_t> > misspelled;
-				if(node->type() == kNodeTypeText)
-				{
-					auto misspellings = buffer.misspellings(offset, offset + node->length());
-					for(auto it = misspellings.begin(); it != misspellings.end(); )
-					{
-						bool flag = it->second;
-						size_t from = it->first;
-						size_t to = ++it != misspellings.end() ? it->first : node->length();
-						if(flag)
-						{
-							bool intersects = false;
-							for(auto const& range : selection)
-								intersects = intersects || !(to + offset < range.min().index || range.max().index < from + offset);
+				// Skip nodes outside the visible rect (see draw_background).
+				if(anchor.x + x >= CGRectGetMaxX(visibleRect))
+					break;
 
-							if(!intersects)
-								misspelled.emplace_back(from, to);
+				if(anchor.x + x + node->width() > CGRectGetMinX(visibleRect))
+				{
+					std::vector< std::pair<size_t, size_t> > misspelled;
+					if(node->type() == kNodeTypeText)
+					{
+						auto misspellings = buffer.misspellings(offset, offset + node->length());
+						for(auto it = misspellings.begin(); it != misspellings.end(); )
+						{
+							bool flag = it->second;
+							size_t from = it->first;
+							size_t to = ++it != misspellings.end() ? it->first : node->length();
+							if(flag)
+							{
+								bool intersects = false;
+								for(auto const& range : selection)
+									intersects = intersects || !(to + offset < range.min().index || range.max().index < from + offset);
+
+								if(!intersects)
+									misspelled.emplace_back(from, to);
+							}
 						}
 					}
+
+					node->draw_foreground(theme, context, isFlipped, visibleRect, buffer, offset, misspelled, CGPointMake(anchor.x + x, anchor.y + lines[i].y), lines[i].baseline);
 				}
 
-				node->draw_foreground(theme, context, isFlipped, visibleRect, buffer, offset, misspelled, CGPointMake(anchor.x + x, anchor.y + lines[i].y), lines[i].baseline);
 				x += node->width();
 				offset += node->length();
 			}

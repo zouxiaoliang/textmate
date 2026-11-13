@@ -68,7 +68,7 @@ namespace ct
 	{
 		line_t (std::string const& text, std::map<size_t, scope::scope_t> const& scopes, theme_ptr const& theme, size_t tabSize, ct::metrics_t const& metrics, CGColorRef textColor = NULL);
 
-		void draw_foreground (CGPoint pos, ng::context_t const& context, bool isFlipped, std::vector< std::pair<size_t, size_t> > const& misspelled, theme_ptr const& theme) const;
+		void draw_foreground (CGPoint pos, ng::context_t const& context, bool isFlipped, std::vector< std::pair<size_t, size_t> > const& misspelled, theme_ptr const& theme, CGRect visibleRect) const;
 		void draw_background (CGPoint pos, CGFloat height, ng::context_t const& context, bool isFlipped, CGColorRef currentBackground) const;
 
 		CGFloat width (CGFloat* ascent = NULL, CGFloat* descent = NULL, CGFloat* leading = NULL) const;
@@ -77,18 +77,30 @@ namespace ct
 		CGFloat offset_for_index (size_t index) const;
 
 	private:
-		void draw_invisible (std::vector<size_t> locations, CGPoint pos, std::string const& text, styles_t const& styles, ng::context_t const& context, bool isFlipped) const;
+		struct marker_t
+		{
+			marker_t (size_t location, size_t utf16Index) : location(location), utf16Index(utf16Index) { }
+			size_t location;    // Byte index within the line’s text
+			size_t utf16Index;  // Corresponding UTF-16 index (for CoreText string indices)
+			CGFloat x1 = 0;     // Line-relative offset of the marker, filled in by cache_marker_offsets()
+			CGFloat x2 = 0;     // Line-relative offset of the character following the marker
+		};
+
+		void draw_invisible (std::vector<marker_t> const& markers, CGPoint pos, std::string const& text, styles_t const& styles, ng::context_t const& context, bool isFlipped, CGRect visibleRect) const;
+		void cache_marker_offsets () const;
 
 		typedef std::shared_ptr<std::remove_pointer<CTLineRef>::type> CTLinePtr;
 		typedef std::shared_ptr<std::remove_pointer<CGColorRef>::type> CGColorPtr;
 
 		std::string _text;
 		CTLinePtr _line;
+		CGFloat _width = 0, _ascent = 0, _descent = 0, _leading = 0; // Cached typographic bounds (the CTLine is immutable once constructed)
 		std::vector< std::pair<CFRange, CGColorPtr> > _backgrounds;
 		std::vector< std::pair<CFRange, CGColorPtr> > _underlines;
 		std::vector< std::pair<CFRange, CGColorPtr> > _strikethroughs;
-		std::vector<size_t> _tab_locations;
-		std::vector<size_t> _space_locations;
+		mutable std::vector<marker_t> _tab_markers;
+		mutable std::vector<marker_t> _space_markers;
+		mutable bool _marker_offsets_cached = false;
 		CGFloat _x_height; // For centering strikethrough line
 	};
 
