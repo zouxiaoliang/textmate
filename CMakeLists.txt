@@ -62,7 +62,7 @@ if(_git_result EQUAL 0 AND _git_describe MATCHES "^v([0-9]+\\.[0-9]+[0-9.]*)(-([
     string(APPEND TEXTMATE_VERSION ".${CMAKE_MATCH_3}")
   endif()
 else()
-  set(TEXTMATE_VERSION "2.5")
+  set(TEXTMATE_VERSION "3.0.0")
 endif()
 
 # Shared includes
