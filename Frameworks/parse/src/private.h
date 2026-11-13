@@ -26,6 +26,7 @@ namespace parse
 		bool operator!= (rule_t const& rhs) const { return rule_id != rhs.rule_id; }
 
 		std::string include_string;
+		std::string include_absolute;
 
 		std::string scope_string;
 		std::string content_scope_string;
@@ -55,6 +56,7 @@ namespace parse
 		regexp::pattern_t while_pattern;
 		regexp::pattern_t end_pattern;
 		bool match_pattern_is_anchored = false;
+		bool patterns_compiled = false;
 
 		// =================
 		// = Mutable State =
@@ -63,6 +65,8 @@ namespace parse
 		bool included = false;
 		bool is_root = false;
 	};
+
+	void compile_patterns (rule_t* rule);
 
 	struct stack_t
 	{

@@ -1,6 +1,7 @@
 #include "grammar.h"
 #include "private.h"
 #include <bundles/bundles.h>
+#include <mutex>
 #include <plist/plist.h>
 #include <plist/schema.h>
 #include <text/format.h>
@@ -44,6 +45,7 @@ namespace parse
 			.map("end",                 &rule_t::end_string                               )
 			.map("applyEndPatternLast", &rule_t::apply_end_last                           )
 			.map("include",             &rule_t::include_string                           )
+			.map("include_absolute",    &rule_t::include_absolute                         )
 			.map("patterns",            &rule_t::children,             &convert_array     )
 			.map("captures",            &rule_t::captures,             &convert_dictionary)
 			.map("beginCaptures",       &rule_t::begin_captures,       &convert_dictionary)
@@ -93,8 +95,16 @@ namespace parse
 	// = grammar_t =
 	// =============
 
-	static void compile_patterns (rule_t* rule)
+	// Patterns are compiled lazily (by the parser, see collect_rule in parse.cc) since a grammar with includes can easily have thousands of rules, most of which are never used for a given document
+	void compile_patterns (rule_t* rule)
 	{
+		// Parsing runs on the global concurrent dispatch queue, so the same grammar can be reached from multiple buffers
+		static std::mutex mutex;
+		std::lock_guard<std::mutex> lock(mutex);
+		if(rule->patterns_compiled)
+			return;
+		rule->patterns_compiled = true;
+
 		if(rule->match_string != NULL_STR)
 		{
 			rule->match_pattern = regexp::pattern_t(rule->match_string);
@@ -116,9 +126,12 @@ namespace parse
 			if(!rule->end_pattern)
 				os_log_error(OS_LOG_DEFAULT, "Bad end pattern for %{public}s", rule->scope_string.c_str());
 		}
+	}
 
+	static void setup_injections (rule_t* rule)
+	{
 		for(rule_ptr child : rule->children)
-			compile_patterns(child.get());
+			setup_injections(child.get());
 
 		repository_ptr maps[] = { rule->repository, rule->injection_rules, rule->captures, rule->begin_captures, rule->while_captures, rule->end_captures };
 		for(auto const& map : maps)
@@ -127,7 +140,7 @@ namespace parse
 				continue;
 
 			for(auto const& pair : *map)
-				compile_patterns(pair.second.get());
+				setup_injections(pair.second.get());
 		}
 
 		if(rule->injection_rules)
@@ -170,7 +183,7 @@ namespace parse
 			else
 			{
 				std::string::size_type fragment = include.find('#');
-				if(rule_ptr grammar = find_grammar(include.substr(0, fragment), base))
+				if(rule_ptr grammar = find_grammar(include.substr(0, fragment), rule->include_absolute == "1" ? rule_ptr() : base))
 					rule->include = fragment == std::string::npos ? grammar.get() : find_repository_item(grammar.get(), include.substr(fragment+1));
 			}
 
@@ -219,7 +232,7 @@ namespace parse
 				if(rule_ptr grammar = convert_plist(item->plist()))
 				{
 					setup_includes(grammar, grammar, grammar, rule_stack_t(grammar.get()));
-					compile_patterns(grammar.get());
+					setup_injections(grammar.get());
 					res.emplace_back(injectionSelector, grammar);
 				}
 			}
@@ -234,7 +247,7 @@ namespace parse
 		{
 			_grammars.emplace(scope, grammar);
 			setup_includes(grammar, base ?: grammar, grammar, rule_stack_t(grammar.get()));
-			compile_patterns(grammar.get());
+			setup_injections(grammar.get());
 		}
 		return grammar;
 	}
