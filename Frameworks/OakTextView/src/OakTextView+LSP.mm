@@ -1,6 +1,8 @@
 #import "OakTextView_Private.h"
 #import "OakTextView_LSPUtilities.h"
 #import "OakDocumentView.h"
+#import "OakNavigationHistory.h"
+#import "OakWorkspaceSymbolChooser.h"
 #import <lsp/LSPManager.h>
 #import <lsp/LSPClient.h>
 #import <Preferences/Keys.h>
@@ -31,6 +33,32 @@ static NSDictionary<NSString*, NSArray<NSDictionary*>*>* editsFromWorkspaceEdit 
 	}
 
 	return editsByUri;
+}
+
+// Normalize an LSP response for the location queries (definition, declaration,
+// typeDefinition, implementation) into @{ uri, line, character } dictionaries.
+// Handles Location, Location[], LocationLink, LocationLink[] and NSNull.
+static NSArray<NSDictionary*>* NormalizeLSPLocations (id raw)
+{
+	NSMutableArray<NSDictionary*>* res = [NSMutableArray new];
+	NSArray* items = nil;
+	if([raw isKindOfClass:[NSArray class]])
+		items = raw;
+	else if([raw isKindOfClass:[NSDictionary class]])
+		items = @[ raw ];
+	if(!items)
+		return res;
+
+	for(NSDictionary* obj in items)
+	{
+		if([obj isKindOfClass:[NSDictionary class]] == NO)
+			continue;
+		NSString* uri = obj[@"uri"] ?: obj[@"targetUri"];
+		NSDictionary* start = obj[@"range"][@"start"] ?: obj[@"targetSelectionRange"][@"start"] ?: obj[@"targetRange"][@"start"];
+		if(uri && start)
+			[res addObject:@{ @"uri": uri, @"line": start[@"line"] ?: @0, @"character": start[@"character"] ?: @0 }];
+	}
+	return res;
 }
 
 @implementation OakTextView (LSP)
@@ -105,6 +133,149 @@ static NSDictionary<NSString*, NSArray<NSDictionary*>*>* editsFromWorkspaceEdit 
 	return best;
 }
 
+// ============================
+// = Navigation History Jumps =
+// ============================
+
+- (text::range_t)currentNavigationSelection
+{
+	if(!documentView)
+		return text::range_t();
+	text::pos_t min = documentView->convert(documentView->ranges().last().min().index);
+	text::pos_t max = documentView->convert(documentView->ranges().last().max().index);
+	return text::range_t(min, max);
+}
+
+- (void)jumpToLSPLocation:(NSString*)uri line:(NSUInteger)line character:(NSUInteger)character
+{
+	NSString* filePath = [NSURL URLWithString:uri].path;
+	if(!filePath)
+		return;
+
+	if(documentView)
+		[OakNavigationHistory.sharedInstance recordLocationForDocument:self.document selection:[self currentNavigationSelection]];
+
+	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:filePath];
+	text::range_t selection(text::pos_t(line, character));
+	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+}
+
+- (void)navigateToPath:(NSString*)path selection:(text::range_t)selection
+{
+	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:path];
+	if(!targetDoc)
+	{
+		NSBeep();
+		return;
+	}
+	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+}
+
+- (void)navigateBack:(id)sender
+{
+	if(!documentView)
+		return;
+
+	__weak OakTextView* weakSelf = self;
+	[OakNavigationHistory.sharedInstance goBackFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
+		[weakSelf navigateToPath:path selection:selection];
+	}];
+}
+
+- (void)navigateForward:(id)sender
+{
+	if(!documentView)
+		return;
+
+	__weak OakTextView* weakSelf = self;
+	[OakNavigationHistory.sharedInstance goForwardFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
+		[weakSelf navigateToPath:path selection:selection];
+	}];
+}
+
+// ============================
+// = LSP Location Query Jumps =
+// ============================
+
+// Shared implementation for textDocument/definition, declaration,
+// typeDefinition and implementation. All of them answer with Location or
+// LocationLink data, normalized by NormalizeLSPLocations().
+- (void)performLocationQuery:(NSString*)method
+{
+	if(!documentView)
+		return;
+
+	OakDocument* doc = self.document;
+	if(!doc.path)
+		return;
+
+	size_t caret = documentView->ranges().last().last.index;
+	text::pos_t pos = documentView->convert(caret);
+
+	LSPManager* lsp = [LSPManager sharedManager];
+	[lsp flushPendingChangesForDocument:doc];
+
+	NSDictionary* params = @{
+		@"textDocument": @{ @"uri": [NSURL fileURLWithPath:doc.path].absoluteString },
+		@"position":     @{ @"line": @(pos.line), @"character": @(pos.column) },
+	};
+
+	__weak OakTextView* weakSelf = self;
+	[lsp requestLanguageQuery:method forDocument:doc params:params completion:^(id raw, NSString* errorCode) {
+		OakTextView* strongSelf = weakSelf;
+		if(!strongSelf || !strongSelf->documentView)
+			return;
+
+		NSArray<NSDictionary*>* locations = NormalizeLSPLocations(raw);
+		if(errorCode || locations.count == 0)
+		{
+			NSBeep();
+			return;
+		}
+
+		NSString* currentUri = strongSelf.document.path ? [NSURL fileURLWithPath:strongSelf.document.path].absoluteString : nil;
+		NSDictionary* loc = [strongSelf bestDefinitionLocation:locations currentURI:currentUri];
+		[strongSelf jumpToLSPLocation:loc[@"uri"] line:[loc[@"line"] unsignedIntegerValue] character:[loc[@"character"] unsignedIntegerValue]];
+	}];
+}
+
+- (void)lspGoToDeclaration:(id)sender
+{
+	[self performLocationQuery:@"textDocument/declaration"];
+}
+
+- (void)lspGoToTypeDefinition:(id)sender
+{
+	[self performLocationQuery:@"textDocument/typeDefinition"];
+}
+
+- (void)lspGoToImplementation:(id)sender
+{
+	[self performLocationQuery:@"textDocument/implementation"];
+}
+
+// ==================================
+// = Workspace Symbol Search (Cmd+T) =
+// ==================================
+
+- (void)lspShowWorkspaceSymbols:(id)sender
+{
+	if(!_lspWorkspaceSymbolChooser)
+	{
+		_lspWorkspaceSymbolChooser = [[OakWorkspaceSymbolChooser alloc] initWithBaseDocument:self.document];
+		_lspWorkspaceSymbolChooser.target = self;
+		_lspWorkspaceSymbolChooser.action = @selector(workspaceSymbolChooserDidSelectItems:);
+	}
+	_lspWorkspaceSymbolChooser.baseDocument = self.document;
+	[_lspWorkspaceSymbolChooser showWindowRelativeToFrame:[self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]]];
+}
+
+- (void)workspaceSymbolChooserDidSelectItems:(id)sender
+{
+	for(OakWorkspaceSymbolItem* item in [sender selectedItems])
+		[self jumpToLSPLocation:item.fileURI line:item.line character:item.column];
+}
+
 // ========================
 // = LSP Go to Definition =
 // ========================
@@ -145,14 +316,7 @@ static NSDictionary<NSString*, NSArray<NSDictionary*>*>* editsFromWorkspaceEdit 
 			NSUInteger line = [loc[@"line"] unsignedIntegerValue];
 			NSUInteger character = [loc[@"character"] unsignedIntegerValue];
 
-			NSURL* url = [NSURL URLWithString:uri];
-			NSString* filePath = url.path;
-			if(!filePath)
-				return;
-
-			OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:filePath];
-			text::range_t selection(text::pos_t(line, character));
-			[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+			[strongSelf jumpToLSPLocation:uri line:line character:character];
 		}];
 }
 
@@ -202,18 +366,7 @@ static NSDictionary<NSString*, NSArray<NSDictionary*>*>* editsFromWorkspaceEdit 
 			if(locations.count == 1)
 			{
 				NSDictionary* loc = locations.firstObject;
-				NSString* uri = loc[@"uri"];
-				NSUInteger line = [loc[@"line"] unsignedIntegerValue];
-				NSUInteger character = [loc[@"character"] unsignedIntegerValue];
-
-				NSURL* url = [NSURL URLWithString:uri];
-				NSString* filePath = url.path;
-				if(!filePath)
-					return;
-
-				OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:filePath];
-				text::range_t selection(text::pos_t(line, character));
-				[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+				[strongSelf jumpToLSPLocation:loc[@"uri"] line:[loc[@"line"] unsignedIntegerValue] character:[loc[@"character"] unsignedIntegerValue]];
 				return;
 			}
 
@@ -271,9 +424,8 @@ static NSDictionary<NSString*, NSArray<NSDictionary*>*>* editsFromWorkspaceEdit 
 
 - (void)referencesPanel:(OakReferencesPanel*)panel didSelectItem:(OakReferenceItem*)item
 {
-	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:item.filePath];
-	text::range_t selection(text::pos_t(item.line, item.column));
-	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+	NSString* uri = [NSURL fileURLWithPath:item.filePath].absoluteString;
+	[self jumpToLSPLocation:uri line:item.line character:item.column];
 }
 
 - (void)referencesPanelDidClose:(OakReferencesPanel*)panel

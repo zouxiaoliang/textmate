@@ -887,6 +887,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				auto const& caps = msg["result"]["capabilities"];
 				NSMutableSet* queries = [NSMutableSet set];
 				NSDictionary<NSString*, NSString*>* providers = @{ @"textDocument/definition": @"definitionProvider", @"textDocument/references": @"referencesProvider",
+					@"textDocument/declaration": @"declarationProvider", @"textDocument/typeDefinition": @"typeDefinitionProvider", @"textDocument/implementation": @"implementationProvider",
 					@"textDocument/documentSymbol": @"documentSymbolProvider", @"workspace/symbol": @"workspaceSymbolProvider", @"textDocument/hover": @"hoverProvider" };
 				BOOL utf16 = !caps.contains("positionEncoding") || caps["positionEncoding"] == "utf-16";
 				for(NSString* method in providers) {

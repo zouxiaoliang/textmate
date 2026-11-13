@@ -313,8 +313,12 @@ BOOL HasDocumentWindow (NSArray* windows)
 			.submenu = {
 				{ @"Command Palette…", @selector(showCommandPalette:), @"P", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagShift },
 				{ /* -------- */ },
+				{ @"Back",                       @selector(navigateBack:),                 .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption, .key = NSLeftArrowFunctionKey  },
+				{ @"Forward",                    @selector(navigateForward:),              .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption, .key = NSRightArrowFunctionKey },
+				{ /* -------- */ },
 				{ @"Jump to Line…",              @selector(orderFrontGoToLinePanel:),      @"l" },
 				{ @"Jump to Symbol…",            @selector(showSymbolChooser:),            @"T" },
+				{ @"Go to Symbol in Workspace…", @selector(lspShowWorkspaceSymbols:),      @"o", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption },
 				{ @"Jump to Selection",          @selector(centerSelectionInVisibleArea:), @"j" },
 				{ /* -------- */ },
 				{ @"Set Bookmark",               @selector(toggleCurrentBookmark:),                                                   .key = NSF2FunctionKey },
@@ -373,6 +377,9 @@ BOOL HasDocumentWindow (NSArray* windows)
 				{ @"LSP",
 					.submenu = {
 						{ @"Go to Definition",                     @selector(lspGoToDefinition:),           @"d", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption },
+						{ @"Go to Declaration",                    @selector(lspGoToDeclaration:),          @"p", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption },
+						{ @"Go to Type Definition",                @selector(lspGoToTypeDefinition:),       @"t", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption },
+						{ @"Go to Implementation",                 @selector(lspGoToImplementation:),       .modifierFlags = NSEventModifierFlagCommand, .key = NSF12FunctionKey },
 						{ @"Show Hover Info",                      @selector(lspShowHoverInfo:) },
 						{ @"Find References",                      @selector(lspFindReferences:),           @"r", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagControl },
 						{ @"Rename Symbol",                        @selector(lspRename:),                   @"r", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagShift },

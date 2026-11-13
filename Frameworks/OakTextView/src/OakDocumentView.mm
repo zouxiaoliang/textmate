@@ -531,10 +531,70 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 	self.symbolChooser = nil;
 }
 
+// Flatten an LSP documentSymbol response (DocumentSymbol[] tree or
+// SymbolInformation[] list) into @{ name, line, column, depth } entries with
+// 0-based line/column, ordered depth-first.
+static void FlattenDocumentSymbolNodes (NSArray* nodes, NSUInteger depth, NSMutableArray<NSDictionary*>* out)
+{
+	for(NSDictionary* node in nodes)
+	{
+		if([node isKindOfClass:[NSDictionary class]] == NO)
+			continue;
+
+		NSString* name  = node[@"name"];
+		NSDictionary* start = node[@"selectionRange"][@"start"] ?: node[@"location"][@"range"][@"start"];
+		if(!name || !start)
+			continue;
+
+		[out addObject:@{
+			@"name":   name,
+			@"line":   start[@"line"] ?: @0,
+			@"column": start[@"character"] ?: @0,
+			@"depth":  @(depth),
+		}];
+
+		if([node[@"children"] isKindOfClass:[NSArray class]])
+			FlattenDocumentSymbolNodes(node[@"children"], depth + 1, out);
+	}
+}
+
+static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
+{
+	NSMutableArray<NSDictionary*>* res = [NSMutableArray new];
+	if([raw isKindOfClass:[NSArray class]])
+		FlattenDocumentSymbolNodes(raw, 0, res);
+	return res;
+}
+
 - (IBAction)showSymbolChooser:(id)sender
 {
 	self.symbolChooser = SymbolChooser.sharedInstance;
 	[self.symbolChooser showWindowRelativeToFrame:[self.window convertRectToScreen:[_textView convertRect:[_textView visibleRect] toView:nil]]];
+	[self requestLSPOutlineForSymbolChooser];
+}
+
+- (void)requestLSPOutlineForSymbolChooser
+{
+	OakDocument* doc = self.document;
+	if(!doc || !doc.path || ![[LSPManager sharedManager] hasClientForDocument:doc])
+		return;
+
+	NSDictionary* params = @{ @"textDocument": @{ @"uri": [NSURL fileURLWithPath:doc.path].absoluteString } };
+	__weak OakDocumentView* weakSelf = self;
+	[[LSPManager sharedManager] requestLanguageQuery:@"textDocument/documentSymbol" forDocument:doc params:params completion:^(id raw, NSString* errorCode){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			OakDocumentView* strongSelf = weakSelf;
+			// Ignore the response when the chooser is no longer up for this document.
+			if(!strongSelf || !strongSelf->_symbolChooser || strongSelf.document != doc)
+				return;
+
+			NSArray<NSDictionary*>* symbols = FlattenDocumentSymbols(raw);
+			if(symbols.count == 0)
+				return;
+
+			strongSelf->_symbolChooser.lspSymbols = symbols;
+		});
+	}];
 }
 
 - (void)symbolChooserDidSelectItems:(id)sender

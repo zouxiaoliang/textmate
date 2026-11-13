@@ -18,6 +18,7 @@
 @class OakAccessibleLink;
 @class OakChoiceMenu;
 @class LiveSearchView;
+@class OakWorkspaceSymbolChooser;
 
 typedef indexed_map_t<OakAccessibleLink*> links_t;
 typedef std::shared_ptr<links_t> links_ptr;
@@ -341,6 +342,10 @@ struct diagnostic_banner_t
 
 	OakReferencesPanel* _lspReferencesPanel;
 
+	// = LSP Workspace Symbols =
+
+	OakWorkspaceSymbolChooser* _lspWorkspaceSymbolChooser;
+
 	// = LSP Rename =
 
 	OakRenameField* _lspRenameField;
@@ -460,6 +465,14 @@ struct diagnostic_banner_t
 - (BOOL)canRequestCodeActions;
 - (OakThemeEnvironment*)lspTheme;
 - (NSDictionary*)bestDefinitionLocation:(NSArray<NSDictionary*>*)locations currentURI:(NSString*)currentUri;
+// Record the current location on the navigation history stack and jump to uri.
+- (void)jumpToLSPLocation:(NSString*)uri line:(NSUInteger)line character:(NSUInteger)character;
+- (IBAction)lspGoToDeclaration:(id)sender;
+- (IBAction)lspGoToTypeDefinition:(id)sender;
+- (IBAction)lspGoToImplementation:(id)sender;
+- (IBAction)lspShowWorkspaceSymbols:(id)sender;
+- (IBAction)navigateBack:(id)sender;
+- (IBAction)navigateForward:(id)sender;
 @end
 
 @interface OakTextView (Formatting)

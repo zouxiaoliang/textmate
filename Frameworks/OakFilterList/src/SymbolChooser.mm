@@ -79,10 +79,42 @@ static SymbolChooserItem* CreateItem (OakDocument* document, text::pos_t const& 
 
 - (void)setTMDocument:(OakDocument*)aDocument
 {
+	_lspSymbols = nil;
 	if(_TMDocument = aDocument)
 		[self updateItems:self];
 	NSString* title = @"Jump to Symbol";
 	self.window.title = _TMDocument ? [title stringByAppendingFormat:@" — %@", _TMDocument.displayName] : title;
+}
+
+- (void)setLspSymbols:(NSArray<NSDictionary*>*)anArray
+{
+	_lspSymbols = anArray;
+	if(_TMDocument)
+		[self updateItems:self];
+}
+
+// Enumerate the symbols for the current document. Prefers the LSP-provided
+// symbols (lspSymbols) and falls back to the bundle’s scope-derived symbols.
+// A leading " " marks an indented (nested) symbol.
+- (void)enumerateSymbolsUsingBlock:(void(^)(text::pos_t const& pos, NSString* symbol))handler
+{
+	if(_lspSymbols.count)
+	{
+		for(NSDictionary* entry in _lspSymbols)
+		{
+			NSString* name = entry[@"name"];
+			if(!name)
+				continue;
+
+			NSUInteger depth = [entry[@"depth"] unsignedIntegerValue];
+			NSString* symbol = depth ? [@"" stringByPaddingToLength:depth withString:@" " startingAtIndex:0] : @"";
+			handler(text::pos_t([entry[@"line"] unsignedIntegerValue], [entry[@"column"] unsignedIntegerValue]), [symbol stringByAppendingString:name]);
+		}
+	}
+	else
+	{
+		[_TMDocument enumerateSymbolsUsingBlock:handler];
+	}
 }
 
 - (void)setSelectionString:(NSString*)aString
@@ -120,7 +152,7 @@ static SymbolChooserItem* CreateItem (OakDocument* document, text::pos_t const& 
 	{
 		if(OakIsEmptyString(self.filterString))
 		{
-			[_TMDocument enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
+			[self enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
 				if(![symbol isEqualToString:@"-"])
 					[res addObject:CreateItem(_TMDocument, pos, symbol, std::vector< std::pair<size_t, size_t> >())];
 			}];
@@ -132,7 +164,7 @@ static SymbolChooserItem* CreateItem (OakDocument* document, text::pos_t const& 
 			__block NSString* sectionName = nil;
 			__block std::multimap<double, SymbolChooserItem*> rankedItems;
 
-			[_TMDocument enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
+			[self enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
 				if([symbol isEqualToString:@"-"])
 					return;
 

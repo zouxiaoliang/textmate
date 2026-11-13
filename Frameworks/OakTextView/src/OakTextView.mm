@@ -1,5 +1,6 @@
 #import "OakTextView_Private.h"
 #import "OakTextView_LSPUtilities.h"
+#import "OakNavigationHistory.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "OakChoiceMenu.h"
 #import "OakDocumentView.h" // addAuxiliaryView:atEdge: signature
@@ -3068,6 +3069,19 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 		OakDocument* doc = self.document;
 		return doc && [[LSPManager sharedManager] hasClientForDocument:doc];
 	}
+	else if([aMenuItem action] == @selector(lspGoToDeclaration:) || [aMenuItem action] == @selector(lspGoToTypeDefinition:) || [aMenuItem action] == @selector(lspGoToImplementation:) || [aMenuItem action] == @selector(lspShowWorkspaceSymbols:))
+	{
+		OakDocument* doc = self.document;
+		return doc && [[LSPManager sharedManager] hasClientForDocument:doc];
+	}
+	else if([aMenuItem action] == @selector(navigateBack:))
+	{
+		return documentView && OakNavigationHistory.sharedInstance.canGoBack;
+	}
+	else if([aMenuItem action] == @selector(navigateForward:))
+	{
+		return documentView && OakNavigationHistory.sharedInstance.canGoForward;
+	}
 	return YES;
 }
 
@@ -4072,14 +4086,7 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 					NSUInteger line = [loc[@"line"] unsignedIntegerValue];
 					NSUInteger character = [loc[@"character"] unsignedIntegerValue];
 
-					NSURL* url = [NSURL URLWithString:uri];
-					NSString* filePath = url.path;
-					if(!filePath)
-						return;
-
-					OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:filePath];
-					text::range_t selection(text::pos_t(line, character));
-					[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+					[self jumpToLSPLocation:uri line:line character:character];
 				}];
 			return;
 		}
