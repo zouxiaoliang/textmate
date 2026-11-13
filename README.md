@@ -280,7 +280,7 @@ lspCommand = "xcrun sourcekit-lsp"
 | `formatCommand` | Shell command for an external formatter (stdin/stdout, overrides LSP formatting) |
 | `formatOnSave` | Set to `true` to format before saving — uses `formatCommand` if set, else LSP (default: `false`) |
 
-Press **Opt+Tab** to trigger LSP completions. Diagnostics (errors, warnings) appear automatically in the gutter.
+Press **Ctrl+Space** to trigger LSP completions. Diagnostics (errors, warnings) appear automatically in the gutter.
 
 ### Debugging
 

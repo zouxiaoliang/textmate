@@ -378,7 +378,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 						{ @"Rename Symbol",                        @selector(lspRename:),                   @"r", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagShift },
 						{ @"Code Actions",                         @selector(lspCodeActions:),              @".", .modifierFlags = NSEventModifierFlagCommand },
 						{ @"Format Document / Selection",          @selector(lspFormatOnly:) },
-						{ @"Complete",                              @selector(lspComplete:),                 .modifierFlags = NSEventModifierFlagOption, .key = NSTabCharacter },
+						{ @"Complete",                              @selector(lspComplete:),                 .modifierFlags = NSEventModifierFlagControl, .key = ' ' },
 						{ /* -------- */ },
 						{ @"Restart Server",                       @selector(lspRestartServer:) },
 						{ @"Re-index Workspace",                   @selector(lspReindexWorkspace:) },
