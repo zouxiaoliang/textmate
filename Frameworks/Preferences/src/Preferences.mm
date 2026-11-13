@@ -112,6 +112,11 @@ static NSString* const kMASPreferencesSelectedViewKey = @"MASPreferences Selecte
 		toolbar.allowsUserCustomization = NO;
 		toolbar.delegate                = self;
 
+		BOOL hasToolbarImages = NO;
+		for(NSViewController* viewController in viewControllers)
+			hasToolbarImages = hasToolbarImages || [viewController respondsToSelector:@selector(toolbarItemImage)];
+		toolbar.displayMode = hasToolbarImages ? NSToolbarDisplayModeIconAndLabel : NSToolbarDisplayModeLabelOnly;
+
 		window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
 		window.delegate           = self;
 		window.hidesOnDeactivate  = NO;
