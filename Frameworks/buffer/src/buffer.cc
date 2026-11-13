@@ -201,7 +201,7 @@ namespace ng
 			_parser_states.set(-1, grammar->seed());
 			_dirty.set(0, true);
 
-			initiate_repair(10);
+			initiate_repair();
 
 			return true;
 		}

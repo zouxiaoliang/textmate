@@ -53,6 +53,8 @@ namespace ng
 		void set_tab_size (ct::metrics_t const& metrics);
 		void reset_font_metrics (ct::metrics_t const& metrics);
 
+		bool needs_layout () const { return _dirty; }
+
 		CGFloat width () const;
 		CGFloat height (ct::metrics_t const& metrics) const;
 

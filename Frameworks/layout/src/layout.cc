@@ -396,6 +396,10 @@ namespace ng
 
 	void layout_t::update_metrics_for_row (row_tree_t::iterator rowIter)
 	{
+		// Skip the (potentially expensive) soft wrap setting lookup for rows that are already laid out.
+		if(!rowIter->value.needs_layout())
+			return;
+
 		if(rowIter->value.layout(_theme, effective_soft_wrap(rowIter), effective_wrap_column(), *_metrics, CGRectZero, _buffer, rowIter->offset._length))
 		{
 			bool didUpdateHeight = update_row(rowIter);

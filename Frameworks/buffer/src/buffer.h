@@ -165,7 +165,7 @@ namespace ng
 
 	private:
 		friend struct undo_manager_t;
-		void set_revision (size_t newRevision) { ASSERT_LT(newRevision, _next_revision); _revision = newRevision; initiate_repair(20); }
+		void set_revision (size_t newRevision) { ASSERT_LT(newRevision, _next_revision); _revision = newRevision; initiate_repair(); }
 		char at (size_t i) const;
 
 		void did_parse (size_t first, size_t last)
@@ -206,8 +206,10 @@ namespace ng
 		friend std::string to_s (buffer_t const& buf, size_t first, size_t last);
 
 		text::indent_t _indent;
-		void initiate_repair (size_t limit_redraw = 0, size_t super_from = -1);
-		void update_scopes (size_t limit_redraw, size_t super_range, std::pair<size_t, size_t> const& range, std::map<size_t, scope::scope_t> const& newScopes, parse::stack_ptr parserState);
+		void initiate_repair ();
+		void update_scopes (std::pair<size_t, size_t> const& range, std::map<size_t, scope::scope_t> const& newScopes, parse::stack_ptr parserState);
+		std::pair<size_t, parse::stack_ptr> parser_state_at_or_before (size_t from) const;
+		size_t repair_batch_end (size_t from) const;
 
 		std::shared_ptr<bool> _parser_reference;
 		bool _async_parsing = false;
