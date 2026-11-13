@@ -255,7 +255,10 @@ OakRolloverButton* OakCreateCloseButton (NSString* accessibilityLabel)
 	{
 		NSColor* color = value;
 		[color set];
-		NSRectFill(aRect);
+		// Clip to our bounds: when linked against the macOS 14 SDK or later, views no longer clip
+		// drawing to their bounds by default, so aRect can extend beyond us and this 1 pt divider
+		// would then paint over the neighboring gutter view, hiding the line numbers.
+		NSRectFill(NSIntersectionRect(aRect, self.bounds));
 	}
 }
 @end
