@@ -31,7 +31,7 @@ static NSString* GitExecutable()
 static NSDictionary* Git(NSString* directory, NSArray<NSString*>* arguments)
 {
 	NSString* executable = GitExecutable();
-	if(!executable) return Error(@"Git was not found. Install the macOS command line tools, or set TM_GIT in ~/.tm_properties.");
+	if(!executable) return Error(@"Git was not found. Install the macOS command line tools, or set TM_GIT in ~/.textmate.");
 	NSTask* task = [[NSTask alloc] init];
 	task.executableURL = [NSURL fileURLWithPath:executable];
 	task.arguments = [@[@"--no-optional-locks", @"-c", @"core.fsmonitor=false", @"-C", directory] arrayByAddingObjectsFromArray:arguments];

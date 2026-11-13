@@ -159,12 +159,12 @@ Choose **View → Show Project Changes** to review changed files across the repo
 
 ## LSP Support
 
-TextMate has built-in Language Server Protocol support for diagnostics and completions. Configure it per-project in `.tm_properties`:
+TextMate has built-in Language Server Protocol support for diagnostics and completions. Configure it per-project in `.textmate` (the shorter replacement for the legacy `.tm_properties` name — both are supported, `.textmate` wins when a directory has both):
 
 ### PHP (intelephense)
 
 ```
-# .tm_properties
+# .textmate
 [ *.php ]
 lspCommand = "intelephense --stdio"
 lspInitOptions = '{"licenceKey":"YOUR-KEY-HERE","clearCache":true}'
@@ -173,7 +173,7 @@ lspInitOptions = '{"licenceKey":"YOUR-KEY-HERE","clearCache":true}'
 ### Go (gopls)
 
 ```
-# .tm_properties
+# .textmate
 [ *.go ]
 lspCommand = gopls
 ```
@@ -181,7 +181,7 @@ lspCommand = gopls
 ### C/C++/Objective-C (clangd)
 
 ```
-# .tm_properties
+# .textmate
 [ *.{c,cc,cpp,h,hpp,m,mm} ]
 lspCommand = clangd
 ```
@@ -189,7 +189,7 @@ lspCommand = clangd
 ### Python (pyright)
 
 ```
-# .tm_properties
+# .textmate
 [ *.py ]
 lspCommand = "pyright-langserver --stdio"
 ```
@@ -199,7 +199,7 @@ lspCommand = "pyright-langserver --stdio"
 Alternative Python server with plugin ecosystem (ruff, mypy, black):
 
 ```
-# .tm_properties
+# .textmate
 [ *.py ]
 lspCommand = pylsp
 ```
@@ -207,7 +207,7 @@ lspCommand = pylsp
 To disable specific plugins (e.g. mypy if it can't find your project's dependencies):
 
 ```
-# .tm_properties
+# .textmate
 [ *.py ]
 lspCommand = pylsp
 lspInitOptions = '{"pylsp": {"plugins": {"pylsp_mypy": {"enabled": false}}}}'
@@ -220,7 +220,7 @@ If you need pylsp to resolve project-specific packages, install it inside your p
 Volar 2.0+ uses Hybrid Mode with `typescript-language-server` for script support:
 
 ```
-# .tm_properties
+# .textmate
 [ *.{vue,ts,tsx,js,jsx} ]
 lspCommand = "$TM_PROJECT_DIRECTORY/node_modules/.bin/typescript-language-server --stdio"
 lspInitOptions = '{ "plugins": [{ "name": "@vue/typescript-plugin", "location": "./node_modules/@vue/language-server", "languages": ["vue"] }] }'
@@ -229,7 +229,7 @@ lspInitOptions = '{ "plugins": [{ "name": "@vue/typescript-plugin", "location": 
 ### Rust (rust-analyzer)
 
 ```
-# .tm_properties
+# .textmate
 [ *.rs ]
 lspCommand = rust-analyzer
 ```
@@ -237,7 +237,7 @@ lspCommand = rust-analyzer
 ### Lua (lua-language-server)
 
 ```
-# .tm_properties
+# .textmate
 [ *.lua ]
 lspCommand = lua-language-server
 ```
@@ -245,7 +245,7 @@ lspCommand = lua-language-server
 ### Bash (bash-language-server)
 
 ```
-# .tm_properties
+# .textmate
 [ *.{sh,bash,zsh} ]
 lspCommand = "bash-language-server start"
 ```
@@ -253,7 +253,7 @@ lspCommand = "bash-language-server start"
 ### Ruby (ruby-lsp)
 
 ```
-# .tm_properties
+# .textmate
 [ *.rb ]
 lspCommand = ruby-lsp
 ```
@@ -263,7 +263,7 @@ lspCommand = ruby-lsp
 Requires Xcode. Project must have a `Package.swift` or `compile_commands.json`.
 
 ```
-# .tm_properties
+# .textmate
 [ *.swift ]
 lspCommand = "xcrun sourcekit-lsp"
 ```
@@ -305,7 +305,7 @@ Or via nix:
 environment.systemPackages = [ pkgs.copilot-language-server ];
 ```
 
-Enable Copilot from the status bar menu, or set `copilotEnabled = true` in `.tm_properties`.
+Enable Copilot from the status bar menu, or set `copilotEnabled = true` in `.textmate`.
 When enabled, TextMate auto-detects the binary from `$PATH`. To override, set `copilotCommand`:
 
 ```
@@ -326,13 +326,13 @@ When enabled and signed in, Copilot suggestions appear automatically as ghost te
 
 ### Enabling
 
-Set `copilotEnabled = true` in `.tm_properties`. Like all TextMate settings, it can be scoped globally, per-project, or per-file-type:
+Set `copilotEnabled = true` in `.textmate`. Like all TextMate settings, it can be scoped globally, per-project, or per-file-type:
 
 ```
-# ~/.tm_properties — enable everywhere
+# ~/.textmate — enable everywhere
 copilotEnabled = true
 
-# project .tm_properties — enable for one file type
+# project .textmate — enable for one file type
 [ *.md ]
 copilotEnabled = true
 ```
@@ -348,7 +348,7 @@ You can use any external formatter that reads stdin and writes formatted output 
 **Note:** Quote the command if it contains arguments.
 
 ```
-# .tm_properties
+# .textmate
 
 # JavaScript/TypeScript with Prettier
 [ *.{js,jsx,ts,tsx} ]
@@ -386,7 +386,7 @@ formatOnSave  = true
 For file types without a `formatCommand`, formatting falls back to the language server (if it supports `textDocument/formatting`):
 
 ```
-# .tm_properties
+# .textmate
 [ *.php ]
 formatOnSave = true
 ```
@@ -397,7 +397,7 @@ The legacy `lspFormatOnSave` key still works for backward compatibility.
 
 Each document window has an embedded terminal panel backed by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). Press **Control+`** to show or hide it (View → Show Terminal Panel). Pick the edge under View → Terminal Panel Position — left, right, or bottom (default). Drag the divider to resize; the placement and size are remembered and seed new windows.
 
-Showing the panel focuses the terminal, hiding it returns focus to the editor. Each window starts one login shell (your account's shell) in the project folder, falling back to the file browser root, the current document's folder, and then your home folder, with TextMate's environment plus the `.tm_properties` variables for that directory. Opening another document afterwards does not move a running shell.
+Showing the panel focuses the terminal, hiding it returns focus to the editor. Each window starts one login shell (your account's shell) in the project folder, falling back to the file browser root, the current document's folder, and then your home folder, with TextMate's environment plus the `.textmate` variables for that directory. Opening another document afterwards does not move a running shell.
 
 | Action | Key |
 |--------|-----|

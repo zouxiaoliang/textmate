@@ -79,7 +79,7 @@ static NSString* const kColumnStatus    = @"status";
 	detectButton.target = self;
 	detectButton.action = @selector(redetect:);
 
-	NSTextField* infoLabel = OakCreateLabel(@"Formatters are used when no formatCommand is set in .tm_properties. Configure formatCommand there to override.");
+	NSTextField* infoLabel = OakCreateLabel(@"Formatters are used when no formatCommand is set in .textmate. Configure formatCommand there to override.");
 	infoLabel.textColor = NSColor.secondaryLabelColor;
 	[infoLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 

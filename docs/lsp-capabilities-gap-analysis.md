@@ -63,7 +63,7 @@ We declare `relatedInformation: true` but discard the data in `handleDiagnostics
 |---|---|---|---|
 | workspace/symbol | Important | Medium | Needs fuzzy search UI (Cmd+T equivalent) |
 | window/showDocument | Nice-to-have | Small | Open file/URL via NSWorkspace |
-| Full workspace/configuration | Important | Medium | Read settings from .tm_properties, pass to server |
+| Full workspace/configuration | Important | Medium | Read settings from .textmate, pass to server |
 | window/showMessageRequest with NSAlert | Important | Medium | Show dialog with action buttons, return selection |
 | File operation notifications (willRename/didRename etc.) | Nice-to-have | Medium | Auto-update imports on file rename |
 | workspace/didChangeWorkspaceFolders | Nice-to-have | Medium | Multi-root workspace support |

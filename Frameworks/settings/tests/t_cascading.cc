@@ -41,3 +41,18 @@ void test_glob_and_scope_selector_ranking ()
 	OAK_ASSERT_EQ(settings_for_path(jail.path("local/file.foo"), "text").get("mySetting"), "4");
 	OAK_ASSERT_EQ(settings_for_path(jail.path("local/file.txt"), "text").get("mySetting"), "5");
 }
+
+void test_textmate_filename_precedence ()
+{
+	test::jail_t jail;
+
+	// When both names exist in a directory, .textmate wins
+	jail.set_content(".textmate",      "mySetting = 1\n");
+	jail.set_content(".tm_properties", "mySetting = 2\n");
+	OAK_ASSERT_EQ(settings_for_path(jail.path("file")).get("mySetting"), "1");
+
+	// The legacy .tm_properties name keeps working
+	test::jail_t legacy;
+	legacy.set_content("foo/.tm_properties", "mySetting = 3\n");
+	OAK_ASSERT_EQ(settings_for_path(legacy.path("foo/file")).get("mySetting"), "3");
+}

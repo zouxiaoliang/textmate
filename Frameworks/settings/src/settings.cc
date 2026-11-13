@@ -57,7 +57,10 @@ namespace
 		std::vector<std::string> res;
 		for(std::string cwd = path::is_absolute(directory) ? directory : path::home(); true; cwd = cwd == "/" ? path::home() : path::parent(cwd))
 		{
-			res.push_back(path::join(cwd, ".tm_properties"));
+			// Prefer the shorter .textmate, falling back to the legacy .tm_properties name
+			std::string const preferred = path::join(cwd, ".textmate");
+			std::string const legacy    = path::join(cwd, ".tm_properties");
+			res.push_back(path::exists(preferred) ? preferred : legacy);
 			if(cwd == path::home())
 				break;
 		}

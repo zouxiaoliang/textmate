@@ -73,7 +73,7 @@ namespace scm
 		{
 			_resolved_executable = find_executable(_required_executable, "TM_" + text::uppercase(_name));
 			if(_resolved_executable == NULL_STR)
-				os_log_error(OS_LOG_DEFAULT, "scm: unable to find ‘%{public}s’ executable (set %{public}s or PATH in ~/.tm_properties)", _required_executable.c_str(), ("TM_" + text::uppercase(_name)).c_str());
+				os_log_error(OS_LOG_DEFAULT, "scm: unable to find ‘%{public}s’ executable (set %{public}s or PATH in ~/.textmate)", _required_executable.c_str(), ("TM_" + text::uppercase(_name)).c_str());
 		}
 	}
 
