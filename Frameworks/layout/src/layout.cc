@@ -189,6 +189,12 @@ namespace ng
 		{
 			iterate(row, _rows)
 			{
+				// Rows not yet laid out will pick up the new wrap column when paragraph_t::layout()
+				// runs for them, so there is nothing to do here (relevant when a large document is
+				// opened, where all rows are dirty and this function runs on the first resize).
+				if(row->value.needs_layout())
+					continue;
+
 				if(effective_soft_wrap(row))
 				{
 					row->value.set_wrapping(true, effective_wrap_column(), *_metrics);

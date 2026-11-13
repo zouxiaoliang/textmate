@@ -25,6 +25,12 @@ namespace encoding
 		if(from == to)
 			return to == kCharsetUTF8 && !utf8::is_valid(content->begin(), content->end()) ? res : content;
 
+		// ASCII is a strict subset of UTF-8, so conversion is the identity function; only a check
+		// for high-bit bytes is required (an iconv round trip would be O(content size), which
+		// dominates opening a large file).
+		if(from == kCharsetASCII && to == kCharsetUTF8)
+			return std::none_of(content->begin(), content->end(), [](char ch){ return (unsigned char)ch & 0x80; }) ? content : res;
+
 		if(auto transcode = text::transcode_t(from, to))
 		{
 			std::string buffer;

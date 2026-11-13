@@ -230,34 +230,65 @@ namespace ng
 
 	void paragraph_t::insert (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
-		std::vector<node_t> newNodes;
-
 		std::string const str = buffer.substr(pos, pos + len);
+		size_t const size = str.size();
+
 		size_t from = 0, i = 0;
-		citerate(ch, diacritics::make_range(str.data(), str.data() + str.size()))
+		while(i < size)
 		{
-			if(*ch == '\n' || representation_for(*ch) != NULL_STR)
+			// Fast path: tab and printable ASCII are single-byte clusters that never require a
+			// representation, so runs of them can be scanned without the grapheme cluster machinery
+			// (which calls into CFCharacterSet for every character and dominates construction of
+			// the layout when a large document is opened).
+			if(str[i] == '\t' || (0x20 <= str[i] && str[i] <= 0x7E))
 			{
-				if(from != i)
+				size_t j = i;
+				while(j < size && (str[j] == '\t' || (0x20 <= str[j] && str[j] <= 0x7E)))
+					++j;
+
+				if(i - from >= kCTLineMaxSize)
+				{
 					insert_text(pos - bufferOffset + from, i - from);
+					from = i;
+				}
 
-				if(*ch == '\n')
-					insert_newline(pos - bufferOffset + i, ch.length());
-				else
-					insert_unprintable(pos - bufferOffset + i, ch.length());
+				while(j - from >= kCTLineMaxSize)
+				{
+					insert_text(pos - bufferOffset + from, kCTLineMaxSize);
+					from += kCTLineMaxSize;
+				}
 
-				from = i + ch.length();
+				i = j;
 			}
-			else if(i - from >= kCTLineMaxSize)
+			else
 			{
-				insert_text(pos - bufferOffset + from, i - from);
-				from = i;
+				auto cluster = diacritics::begin_of(str.data() + i, str.data() + size);
+				uint32_t const ch = *cluster;
+				size_t const chLen = cluster.length();
+
+				if(ch == '\n' || representation_for(ch) != NULL_STR)
+				{
+					if(from != i)
+						insert_text(pos - bufferOffset + from, i - from);
+
+					if(ch == '\n')
+						insert_newline(pos - bufferOffset + i, chLen);
+					else
+						insert_unprintable(pos - bufferOffset + i, chLen);
+
+					from = i + chLen;
+				}
+				else if(i - from >= kCTLineMaxSize)
+				{
+					insert_text(pos - bufferOffset + from, i - from);
+					from = i;
+				}
+				i += chLen;
 			}
-			i += ch.length();
 		}
 
-		if(from != str.size())
-			insert_text(pos - bufferOffset + from, str.size() - from);
+		if(from != size)
+			insert_text(pos - bufferOffset + from, size - from);
 
 		_dirty = true;
 	}
