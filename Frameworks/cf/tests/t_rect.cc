@@ -1,12 +1,14 @@
 #include <cf/cgrect.h>
 #include <text/format.h>
+#include <algorithm>
 
 static void set (std::vector<std::string>& canvas, CGRect const& r, char m = 'x')
 {
-	for(size_t y = (size_t)CGRectGetMinY(r); y < (size_t)CGRectGetMaxY(r); ++y)
+	// Clamp to the canvas: rects may extend past it or be empty/NaN, which would otherwise index out of bounds
+	for(CGFloat y = std::max<CGFloat>(0, CGRectGetMinY(r)); y < std::min<CGFloat>(3, CGRectGetMaxY(r)); ++y)
 	{
-		for(size_t x = (size_t)CGRectGetMinX(r); x < (size_t)CGRectGetMaxX(r); ++x)
-			canvas[y][x] = m;
+		for(CGFloat x = std::max<CGFloat>(0, CGRectGetMinX(r)); x < std::min<CGFloat>(3, CGRectGetMaxX(r)); ++x)
+			canvas[(size_t)y][(size_t)x] = m;
 	}
 }
 

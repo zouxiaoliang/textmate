@@ -69,8 +69,14 @@ void test_basic_tree_delta ()
 	OAK_ASSERT_EQ(buf, buffer);
 
 	buf = "";
-	riterate(it, tree)
+	// Reverse iteration without std::reverse_iterator, whose operator-> keeps a local copy of the
+	// underlying value-caching iterator and hands out a pointer to that copy after it has died
+	// (stack-use-after-scope under ASan).
+	for(auto it = tree.end(); it != tree.begin(); )
+	{
+		--it;
 		buf.insert(0, buffer.substr(it->offset.buffer_size, it->key.buffer_size));
+	}
 	OAK_ASSERT_EQ(buf, buffer);
 
 	// test secondary key

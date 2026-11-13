@@ -23,7 +23,15 @@ void test_attributes ()
 	OAK_ASSERT_EQ(path::get_attr(file, "buz"), "jazz");
 	OAK_ASSERT_EQ(path::get_attr(file, "new"), "value");
 
-	OAK_ASSERT_EQ(path::attributes(file).size(), 2);
+	// macOS may attach its own extended attributes (e.g. com.apple.provenance) to files we create,
+	// so only count the attributes this test set itself.
+	size_t ownAttrCount = 0;
+	for(auto const& pair : path::attributes(file))
+	{
+		if(pair.first.rfind("com.apple.", 0) != 0)
+			++ownAttrCount;
+	}
+	OAK_ASSERT_EQ(ownAttrCount, 2);
 
 	OAK_ASSERT_EQ(path::content(file), "«some content»");
 }

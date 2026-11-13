@@ -43,7 +43,17 @@ void test_iteration ()
 	OAK_ASSERT_EQ(tree.size(), keys.size());
 	std::sort(keys.begin(), keys.end());
 	OAK_ASSERT(std::equal(tree.begin(),  tree.end(),  keys.begin(),  &numeric_bin_comp));
-	OAK_ASSERT(std::equal(tree.rbegin(), tree.rend(), keys.rbegin(), &numeric_bin_comp));
+
+	// Reverse comparison without std::reverse_iterator over the tree: its operator*/operator->
+	// hand out a pointer into a local copy of the value-caching iterator after that copy has
+	// died (stack-use-after-scope under ASan). The vector side is safe (real element pointers).
+	std::vector<ssize_t> treeKeys;
+	for(auto it = tree.end(); it != tree.begin(); )
+	{
+		--it;
+		treeKeys.push_back(it->key);
+	}
+	OAK_ASSERT_EQ(treeKeys, std::vector<ssize_t>(keys.rbegin(), keys.rend()));
 }
 
 void test_copy ()
