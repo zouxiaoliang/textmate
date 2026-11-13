@@ -112,9 +112,6 @@ static NSString* const kMASPreferencesSelectedViewKey = @"MASPreferences Selecte
 		toolbar.allowsUserCustomization = NO;
 		toolbar.delegate                = self;
 
-		// Restore the upstream look: label-only toolbar without pane icons (the PR added SF Symbol icons)
-		toolbar.displayMode = NSToolbarDisplayModeLabelOnly;
-
 		window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
 		window.delegate           = self;
 		window.hidesOnDeactivate  = NO;
