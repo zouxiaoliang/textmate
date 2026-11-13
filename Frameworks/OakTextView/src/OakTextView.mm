@@ -4490,14 +4490,29 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 // =========================
 // = Scroll Action Methods =
 // =========================
-- (void)scrollLineUp:(id)sender                { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, -17)]; } // TODO Query layout for scroll increments
-- (void)scrollLineDown:(id)sender              { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, +17)]; } // TODO Query layout for scroll increments
-- (void)scrollColumnLeft:(id)sender            { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect],  -7, 0)]; } // TODO Query layout for scroll increments
-- (void)scrollColumnRight:(id)sender           { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect],  +7, 0)]; } // TODO Query layout for scroll increments
-- (void)scrollPageUp:(id)sender                { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, -NSHeight([self visibleRect]))]; }
-- (void)scrollPageDown:(id)sender              { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, +NSHeight([self visibleRect]))]; }
-- (void)scrollToBeginningOfDocument:(id)sender { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:(NSRect){ NSZeroPoint, [self visibleRect].size }]; }
-- (void)scrollToEndOfDocument:(id)sender       { [self recordSelector:_cmd withArgument:nil]; [self scrollRectToVisible:(NSRect){ { 0, NSMaxY([self bounds]) - NSHeight([self visibleRect]) }, [self visibleRect].size }]; }
+
+// Scrolling leaves the completion popup anchored to the wrong spot on screen
+// (it is a child window pinned to window coordinates, not the scrolling content).
+- (void)dismissCompletionPopupForScroll
+{
+	if([_lspCompletionPopup isVisible])
+		[_lspCompletionPopup dismiss];
+}
+
+- (void)scrollWheel:(NSEvent*)anEvent
+{
+	[self dismissCompletionPopupForScroll];
+	[super scrollWheel:anEvent];
+}
+
+- (void)scrollLineUp:(id)sender                { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, -17)]; } // TODO Query layout for scroll increments
+- (void)scrollLineDown:(id)sender              { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, +17)]; } // TODO Query layout for scroll increments
+- (void)scrollColumnLeft:(id)sender            { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect],  -7, 0)]; } // TODO Query layout for scroll increments
+- (void)scrollColumnRight:(id)sender           { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect],  +7, 0)]; } // TODO Query layout for scroll increments
+- (void)scrollPageUp:(id)sender                { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, -NSHeight([self visibleRect]))]; }
+- (void)scrollPageDown:(id)sender              { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:NSOffsetRect([self visibleRect], 0, +NSHeight([self visibleRect]))]; }
+- (void)scrollToBeginningOfDocument:(id)sender { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:(NSRect){ NSZeroPoint, [self visibleRect].size }]; }
+- (void)scrollToEndOfDocument:(id)sender       { [self recordSelector:_cmd withArgument:nil]; [self dismissCompletionPopupForScroll]; [self scrollRectToVisible:(NSRect){ { 0, NSMaxY([self bounds]) - NSHeight([self visibleRect]) }, [self visibleRect].size }]; }
 
 // ========
 // = Move =

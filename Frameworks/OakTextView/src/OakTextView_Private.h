@@ -445,6 +445,7 @@ struct diagnostic_banner_t
 - (void)lspComplete:(id)sender;
 - (void)ensureCompletionPopup;
 - (NSPoint)caretPointForCompletionPopup;
+- (void)dismissCompletionPopupForCaretMove;
 @end
 
 @interface OakTextView (Hover)

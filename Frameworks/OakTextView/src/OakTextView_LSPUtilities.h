@@ -47,6 +47,12 @@ struct refresh_helper_t
 					[_self updateSelection];
 					[_self updateSymbol];
 
+					// Caret moved without a buffer edit (click, drag, jump command): the
+					// completion popup is anchored to the old caret position, so dismiss it.
+					// Typing changes the revision and repositions the popup via a re-query.
+					if(_revision == documentView->revision() && _selection != documentView->ranges())
+						[_self dismissCompletionPopupForCaretMove];
+
 					if(_revision != documentView->revision())
 						[_self scheduleCopilotGhostText];
 				}

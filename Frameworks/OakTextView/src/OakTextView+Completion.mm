@@ -46,6 +46,11 @@
 			if(!strongSelf)
 				return;
 
+			// The caret moved while the round-trip was in flight (click, jump, …):
+			// these suggestions belong to the old position, so drop them.
+			if(!strongSelf->documentView || strongSelf->documentView->ranges().last().last.index != caret)
+				return;
+
 			if(suggestions.count == 0)
 			{
 				if(isExplicitTrigger)
@@ -216,6 +221,17 @@
 {
 	_copilotCompletionActive = NO;
 	_lspFilterPrefix = nil;
+}
+
+// The completion popup is anchored to the caret position it was shown at. When the
+// caret moves without an accompanying edit (mouse click, drag selection, caret-moving
+// commands) the popup would keep floating over the old spot, so it gets dismissed.
+// Typing/backspace do not pass through here: those change the buffer revision and are
+// handled by re-querying the server, which repositions the popup.
+- (void)dismissCompletionPopupForCaretMove
+{
+	if([_lspCompletionPopup isVisible])
+		[_lspCompletionPopup dismiss];
 }
 
 - (void)completionPopup:(OakCompletionPopup*)popup resolveItem:(OakCompletionItem*)item

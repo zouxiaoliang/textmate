@@ -7,6 +7,10 @@ private class KeyablePanel: NSPanel {
 }
 
 @MainActor @objc public class OakCommandPalette: NSObject, NSWindowDelegate {
+	private static let frameOffsetKey = "OakCommandPaletteFrameOffset"
+	private static let topInset: CGFloat = 72
+	private static let windowMargin: CGFloat = 8
+
 	@objc public weak var delegate: OakCommandPaletteDelegate?
 	@objc public private(set) weak var parentWindow: NSWindow?
 
@@ -71,10 +75,17 @@ private class KeyablePanel: NSPanel {
 		let panelWidth = min(max(parentFrame.width * 0.5, 400), 700)
 		let panelHeight: CGFloat = 400
 
-		let panelX = parentFrame.origin.x + (parentFrame.width - panelWidth) / 2
-		let panelY = parentFrame.origin.y + parentFrame.height * 0.75 - panelHeight / 2
+		var panelFrame = NSRect(x: parentFrame.origin.x + (parentFrame.width - panelWidth) / 2,
+		                        y: parentFrame.maxY - Self.topInset - panelHeight,
+		                        width: panelWidth, height: panelHeight)
 
-		let panelFrame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
+		// Restore the user's last position, stored as an offset from the parent window origin
+		// so the palette follows whichever window (or screen) it is opened from.
+		if let offsets = UserDefaults.standard.array(forKey: Self.frameOffsetKey) as? [CGFloat], offsets.count == 2 {
+			panelFrame.origin = NSPoint(x: parentFrame.origin.x + offsets[0], y: parentFrame.origin.y + offsets[1])
+		}
+
+		panelFrame.origin = Self.clampToParentWindow(panelFrame, parentFrame: parentFrame)
 
 		let p = KeyablePanel(
 			contentRect: panelFrame,
@@ -125,7 +136,41 @@ private class KeyablePanel: NSPanel {
 		panel?.isVisible ?? false
 	}
 
+	// MARK: - Position
+
+	/// Keeps the palette fully inside its parent window (or hugging its top edge
+	/// when the window is too short to fit it).
+	private static func clampToParentWindow(_ frame: NSRect, parentFrame: NSRect) -> NSPoint {
+		var origin = frame.origin
+		if frame.width < parentFrame.width - 2 * windowMargin {
+			origin.x = max(parentFrame.minX + windowMargin, min(origin.x, parentFrame.maxX - windowMargin - frame.width))
+		} else {
+			origin.x = parentFrame.origin.x + (parentFrame.width - frame.width) / 2
+		}
+		if frame.height < parentFrame.height - 2 * windowMargin {
+			origin.y = max(parentFrame.minY + windowMargin, min(origin.y, parentFrame.maxY - windowMargin - frame.height))
+		} else {
+			origin.y = parentFrame.maxY - windowMargin - frame.height
+		}
+		return origin
+	}
+
+	private func saveFrameOffset() {
+		guard let panel, let parent = parentWindow, panel.isVisible else { return }
+		let offsets = [panel.frame.origin.x - parent.frame.origin.x,
+		               panel.frame.origin.y - parent.frame.origin.y]
+		UserDefaults.standard.set(offsets, forKey: Self.frameOffsetKey)
+	}
+
 	// MARK: - NSWindowDelegate
+
+	nonisolated public func windowDidMove(_ notification: Notification) {
+		// The delegate is only attached to the palette's own panel, so the moved
+		// window is always the panel; save its offset from the parent window.
+		Task { @MainActor in
+			self.saveFrameOffset()
+		}
+	}
 
 	nonisolated public func windowDidResignKey(_ notification: Notification) {
 		Task { @MainActor in
