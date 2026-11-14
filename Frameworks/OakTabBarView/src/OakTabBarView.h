@@ -19,6 +19,11 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 // A short status message shown in the bar's trailing edge, e.g. the terminal's
 // unseen state; nil (or empty) hides it again.
 - (void)setStatusText:(NSString*)text color:(NSColor*)color;
+
+// Performs the system title bar double-click action (AppleActionOnDoubleClick,
+// Zoom by default) — the whole bar doubles as the title bar in the chromeless
+// layout, so both the blank area and tabs trigger this.
+- (void)performTitlebarDoubleClick:(id)sender;
 @end
 
 @protocol OakTabBarViewDelegate <NSObject>

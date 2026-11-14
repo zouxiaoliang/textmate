@@ -102,7 +102,6 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 	std::map<std::string, std::string>     _documentSCMVariables;
 	std::vector<std::string>               _documentScopeAttributes; // attr.os-version, attr.untitled / attr.rev-path + kSettingsScopeAttributesKey
 }
-@property (nonatomic) NSTitlebarAccessoryViewController* titlebarViewController;
 @property (nonatomic) ProjectLayoutView*          layoutView;
 @property (nonatomic) TerminalPanelViewController* terminalPanelController;
 @property (nonatomic, copy) NSString*              terminalSubtitle; // the subtitle text this window last wrote for terminal attention, nil when none
@@ -199,6 +198,8 @@ namespace
 static NSArray* const kObservedKeyPaths = @[ @"textView.selectionString", @"textView.font", @"textView.fontScaleFactor", @"textView.themeUUID", @"selectedDocument.fileType", @"selectedDocument", @"arrayController.arrangedObjects.path", @"arrayController.arrangedObjects.displayName", @"arrayController.arrangedObjects.documentEdited", @"selectedDocument.path", @"selectedDocument.displayName", @"selectedDocument.icon", @"selectedDocument.onDisk" , @"selectedDocument.documentEdited" ];
 
 @implementation DocumentWindowController
+
+static CGFloat const kTabBarLeadingInset = 80; // Room for the traffic lights; the bare strip left of the tab bar stays native title bar.
 
 static NSDictionary* ContextDocument(OakDocument* document)
 {
@@ -494,20 +495,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
 		self.window.delegate           = self;
 		self.window.releasedWhenClosed = NO;
-		// Chromeless layout: the tab bar lives in the title bar and the window
-		// content bleeds under it, so the standard title bar chrome is hidden
-		// and the traffic lights float over the content, Claude-desktop style.
+		// Chromeless layout (Claude-desktop style): the standard title bar chrome
+		// is hidden, the traffic lights float over the content, and the tab bar
+		// is embedded at the top of the content view, leading-aligned next to
+		// the traffic lights. The strip left of the tab bar stays title bar, so
+		// dragging and double-click zooming keep working natively.
 		self.window.titlebarAppearsTransparent = YES;
 		self.window.titleVisibility            = NSWindowTitleHidden;
-
-		_titlebarViewController = [[NSTitlebarAccessoryViewController alloc] init];
-		// AppKit otherwise forces the accessory to its standard 36pt height on macOS 26+
-		// instead of the tab bar's 23pt intrinsic height.
-		_titlebarViewController.automaticallyAdjustsSize = NO;
-		self.tabBarView.frameSize = self.tabBarView.intrinsicContentSize;
-		_titlebarViewController.view = self.tabBarView;
-		_titlebarViewController.fullScreenMinHeight = NSHeight(self.tabBarView.frame);
-		[self.window addTitlebarAccessoryViewController:_titlebarViewController];
 
 		self.terminalPanelController = [[TerminalPanelViewController alloc] initWithContentView:self.layoutView];
 		__weak DocumentWindowController* terminalOwner = self;
@@ -554,17 +548,21 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			[destination.terminalPanelController focusTerminal];
 		};
 
-		OakAddAutoLayoutViewsToSuperview(@[ self.terminalPanelController.view ], self.window.contentView);
+		// Chromeless layout: the tab bar sits at the very top of the content
+		// view; the strip left of it (under the traffic lights) is left bare so
+		// the system title bar still handles window dragging and double-click.
+		NSView* contentView = self.window.contentView;
+		OakAddAutoLayoutViewsToSuperview(@[ self.tabBarView, self.terminalPanelController.view ], contentView);
 		self.window.initialFirstResponder = self.textView;
 
-		// With fullSizeContentView the content view extends under the title
-		// bar; anchor the top edge to the safe area so the editor content
-		// starts below the tab bar instead of behind it.
-		NSView* contentView = self.window.contentView;
-		NSLayoutAnchor* safeAreaTop = contentView.safeAreaLayoutGuide.topAnchor;
-		[contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[view]|" options:0 metrics:nil views:@{ @"view": self.terminalPanelController.view }]];
+		NSLayoutConstraint* tabLeading = [self.tabBarView.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:kTabBarLeadingInset];
 		[NSLayoutConstraint activateConstraints:@[
-			[self.terminalPanelController.view.topAnchor constraintEqualToAnchor:safeAreaTop],
+			[self.tabBarView.topAnchor constraintEqualToAnchor:contentView.topAnchor],
+			[contentView.trailingAnchor constraintEqualToAnchor:self.tabBarView.trailingAnchor],
+			tabLeading,
+			[self.terminalPanelController.view.topAnchor constraintEqualToAnchor:self.tabBarView.bottomAnchor],
+			[self.terminalPanelController.view.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
+			[contentView.trailingAnchor constraintEqualToAnchor:self.terminalPanelController.view.trailingAnchor],
 			[contentView.bottomAnchor constraintEqualToAnchor:self.terminalPanelController.view.bottomAnchor],
 		]];
 
@@ -744,9 +742,6 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.oldWindowFrame = self.newWindowFrame = NSZeroRect;
 		self.layoutView.fileBrowserOnRight = !self.layoutView.fileBrowserOnRight;
 	}
-
-	BOOL disableTabBarCollapsingKey = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableTabBarCollapsingKey];
-	self.titlebarViewController.hidden = !disableTabBarCollapsingKey && self.documents.count <= 1;
 }
 
 - (void)applicationDidBecomeActiveNotification:(NSNotification*)aNotification
@@ -2008,9 +2003,6 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			[self.tabBarView setSelectedTabIndex:MIN(_selectedTabIndex, _documents.count-1)];
 	}
 
-	BOOL disableTabBarCollapsingKey = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableTabBarCollapsingKey];
-	self.titlebarViewController.hidden = !disableTabBarCollapsingKey && self.documents.count <= 1;
-
 	[self updateTouchBarButtons];
 	[[self class] scheduleSessionBackup:self];
 }
@@ -2206,8 +2198,9 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)tabBarView:(OakTabBarView*)aTabBarView didDoubleClickIndex:(NSUInteger)anIndex
 {
-	if(_documents.count > 1)
-		[self takeTabsToTearOffFrom:[NSMutableIndexSet indexSetWithIndex:anIndex]];
+	// Double-clicking a tab no longer tears it off into a new window; the whole
+	// bar acts as the title bar, so it performs the system double-click action.
+	[aTabBarView performTitlebarDoubleClick:self];
 }
 
 - (void)tabBarViewDidDoubleClick:(OakTabBarView*)aTabBarView

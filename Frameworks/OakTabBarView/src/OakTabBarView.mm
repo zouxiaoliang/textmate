@@ -646,6 +646,10 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		[NSApp sendAction:self.dragAction to:self.target from:self];
 		_mouseDownLocation = NSZeroPoint;
 	}
+	// The bar's blank area doubles as the title bar: past a small dead zone,
+	// dragging it moves the window (a click or double-click still reaches mouseUp).
+	else if(!self.tabItem && self.tabBarView && !NSEqualPoints(_mouseDownLocation, NSZeroPoint) && hypot(_mouseDownLocation.x - anEvent.locationInWindow.x, _mouseDownLocation.y - anEvent.locationInWindow.y) >= 2.5)
+		[self.window performWindowDragWithEvent:anEvent];
 }
 
 - (void)mouseUp:(NSEvent*)anEvent
@@ -1501,10 +1505,14 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - NSWidth(_statusTextLabel.frame), round((NSHeight(self.bounds) - NSHeight(_statusTextLabel.frame)) / 2), NSWidth(_statusTextLabel.frame), NSHeight(_statusTextLabel.frame));
 }
 
-- (void)resizeSubviewsWithOldSize:(NSSize)aSize
+- (void)setFrameSize:(NSSize)newSize
 {
-	[super resizeSubviewsWithOldSize:aSize];
-	if(!NSEqualSizes(self.bounds.size, aSize))
+	// Layout is frame-driven (makeLayout reads self.bounds), and under Auto
+	// Layout superviews update our frame without calling
+	// resizeSubviewsWithOldSize: — re-tab whenever the size actually changes.
+	NSSize oldSize = self.bounds.size;
+	[super setFrameSize:newSize];
+	if(!NSEqualSizes(oldSize, newSize))
 		[self updateToLayout:[self makeLayout]];
 }
 @end
