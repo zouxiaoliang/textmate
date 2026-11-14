@@ -15,6 +15,10 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 - (void)performClose:(id)sender;
 
 @property (nonatomic) BOOL neverHideLeftBorder;
+
+// A short status message shown in the bar's trailing edge, e.g. the terminal's
+// unseen state; nil (or empty) hides it again.
+- (void)setStatusText:(NSString*)text color:(NSColor*)color;
 @end
 
 @protocol OakTabBarViewDelegate <NSObject>

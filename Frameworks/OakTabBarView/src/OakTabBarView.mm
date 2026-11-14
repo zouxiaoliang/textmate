@@ -164,6 +164,22 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 }
 @end
 
+// ==================== //
+// = Status Text Link = //
+// ==================== //
+
+// The bar's trailing status message (e.g. "terminal finished"). Pure display:
+// clicks fall through to the background "new tab" area underneath.
+@interface OakTabBarStatusLabel : NSTextField
+@end
+
+@implementation OakTabBarStatusLabel
+- (NSView*)hitTest:(NSPoint)aPoint
+{
+	return nil;
+}
+@end
+
 // ==============
 // = OakTabView =
 // ==============
@@ -219,6 +235,7 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 @property (nonatomic) NSInteger freezeTabFramesLeftOfIndex;
 @property (nonatomic, readonly) OakTabView* backgroundView;
 @property (nonatomic) NSButton* createNewTabButton;
+@property (nonatomic) NSTextField* statusTextLabel;
 @property (nonatomic) NSTrackingArea* trackingArea;
 @property (nonatomic, getter = isDragging) BOOL dragging;
 - (void)didClickCloseButtonForTabView:(OakTabView*)tabView;
@@ -765,6 +782,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		[self addSubview:_backgroundView positioned:NSWindowBelow relativeTo:nil];
 
 		[self addSubview:self.createNewTabButton positioned:NSWindowAbove relativeTo:nil];
+		[self addSubview:self.statusTextLabel positioned:NSWindowAbove relativeTo:self.createNewTabButton];
 
 		[self registerForDraggedTypes:@[ OakTabItemPasteboardType ]];
 	}
@@ -795,6 +813,34 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		_createNewTabButton.target     = self;
 	}
 	return _createNewTabButton;
+}
+
+- (NSTextField*)statusTextLabel
+{
+	if(!_statusTextLabel)
+	{
+		_statusTextLabel                 = [[OakTabBarStatusLabel alloc] initWithFrame:NSZeroRect];
+		_statusTextLabel.editable        = NO;
+		_statusTextLabel.bezeled         = NO;
+		_statusTextLabel.drawsBackground = NO;
+		_statusTextLabel.bordered        = NO;
+		_statusTextLabel.hidden          = YES;
+		_statusTextLabel.lineBreakMode   = NSLineBreakByTruncatingTail;
+		_statusTextLabel.textColor       = NSColor.secondaryLabelColor;
+	}
+	return _statusTextLabel;
+}
+
+- (void)setStatusText:(NSString*)text color:(NSColor*)color
+{
+	NSString* newText = text ?: @"";
+	if([_statusTextLabel.stringValue isEqualToString:newText] && [_statusTextLabel.textColor isEqual:color ?: NSColor.secondaryLabelColor])
+		return;
+	_statusTextLabel.stringValue = newText;
+	_statusTextLabel.textColor   = color ?: NSColor.secondaryLabelColor;
+	_statusTextLabel.hidden      = newText.length == 0;
+	[_statusTextLabel sizeToFit];
+	[self updateToLayout:[self makeLayout]];
 }
 
 - (NSUInteger)selectedTabIndex
@@ -1286,7 +1332,10 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 - (NSArray<OakTabFrame*>*)makeLayout
 {
 	static NSString* const firstTabIdentifier = [NSUUID UUID].UUIDString;
-	CGFloat const visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame);
+	// Reserve the trailing status label's width so the last tab cannot slide under it.
+	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame);
+	if(!_statusTextLabel.hidden)
+		visibleWidth -= NSWidth(_statusTextLabel.frame) + 16;
 	NSUInteger const countOfVisibleTabs = MIN(MAX(0, floor(visibleWidth / _minimumTabSize)), _tabItems.count);
 
 	NSMutableArray<OakTabItem*>* tabItems = [NSMutableArray array];
@@ -1432,6 +1481,9 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 	_backgroundView.frame = NSMakeRect(x, y, NSWidth(self.bounds)+2 - x, height);
 	_createNewTabButton.frame  = { { x, round((height - NSHeight(createNewTabButtonFrame)) / 2) }, createNewTabButtonFrame.size };
+
+	if(!_statusTextLabel.hidden)
+		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - NSWidth(_statusTextLabel.frame), round((NSHeight(self.bounds) - NSHeight(_statusTextLabel.frame)) / 2), NSWidth(_statusTextLabel.frame), NSHeight(_statusTextLabel.frame));
 }
 
 - (void)resizeSubviewsWithOldSize:(NSSize)aSize

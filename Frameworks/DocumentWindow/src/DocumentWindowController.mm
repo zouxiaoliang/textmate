@@ -1754,9 +1754,10 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 }
 
-// The terminal's unseen state is the only thing this window puts in the subtitle; the title and the
-// document tab bar's `documentEdited` flag stay the document's business. `subtitle` (unlike `title`)
-// is invisible in fullscreen and while minimized, so this only helps a window the user can see.
+// The terminal's unseen state used to go into the window subtitle only; the chromeless
+// layout hides the title bar, so the tab bar's trailing status label carries it instead.
+// `subtitle` (unlike `title`) is invisible in fullscreen and while minimized, so this only
+// helps a window the user can see — the tab bar label works in both.
 - (void)updateTerminalAttentionSubtitle
 {
 	NSString* subtitle = self.terminalPanelController.terminalAttentionSubtitle;
@@ -1768,6 +1769,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.terminalSubtitle = subtitle;
 	// AppKit rejects nil here even though the getter starts out empty; "" is the cleared state.
 	self.window.subtitle = subtitle ?: @"";
+	// Blocked programs outrank finished ones, mirroring TerminalAttention.subtitle's fold order.
+	NSColor* statusColor = nil;
+	if([subtitle isEqualToString:@"terminal finished"])
+		statusColor = NSColor.systemGreenColor;
+	else if(subtitle)
+		statusColor = NSColor.systemOrangeColor; // "terminal needs permission" / "terminal needs your input"
+	[self.tabBarView setStatusText:subtitle color:statusColor];
 }
 
 - (void)updateExternalAttributes
