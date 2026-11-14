@@ -778,7 +778,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 		_backgroundView = [[OakTabView alloc] initWithFrame:NSZeroRect tabItem:nil parent:nil];
 		_backgroundView.target       = self;
-		_backgroundView.doubleAction = @selector(newTab:);
+		_backgroundView.doubleAction = @selector(performTitlebarDoubleClick:);
 		[self addSubview:_backgroundView positioned:NSWindowBelow relativeTo:nil];
 
 		[self addSubview:self.createNewTabButton positioned:NSWindowAbove relativeTo:nil];
@@ -1068,6 +1068,21 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 {
 	if([_delegate respondsToSelector:@selector(tabBarViewDidDoubleClick:)])
 		[_delegate tabBarViewDidDoubleClick:self];
+}
+
+// The chromeless layout leaves no visible title bar outside the tab bar, so the
+// bar's blank area doubles as the title bar: double-clicking it performs the
+// system title bar action (AppleActionOnDoubleClick, Zoom by default).
+- (void)performTitlebarDoubleClick:(id)sender
+{
+	NSString* action = [NSUserDefaults.standardUserDefaults stringForKey:@"AppleActionOnDoubleClick"] ?: @"Zoom";
+	NSWindow* window = self.window;
+	if([action isEqualToString:@"Minimize"])
+		[window miniaturize:sender];
+	else if([action isEqualToString:@"Fill Screen"] || [action isEqualToString:@"Fullscreen"])
+		[window toggleFullScreen:sender];
+	else
+		[window zoom:sender];
 }
 
 - (void)performClose:(id)sender
