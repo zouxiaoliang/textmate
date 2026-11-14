@@ -1200,10 +1200,10 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self.editorChanges record:@"document" documentId:self.selectedDocument.identifier.UUIDString];
 	else if([keyPath hasPrefix:@"selectedDocument."] || [keyPath hasPrefix:@"arrayController.arrangedObjects."])
 		[self.editorChanges record:@"metadata" documentId:nil];
-	if(self.terminalPanelController.hasTerminal && ([keyPath isEqualToString:@"textView.font"] || [keyPath isEqualToString:@"textView.fontScaleFactor"] || [keyPath isEqualToString:@"textView.themeUUID"] || [keyPath isEqualToString:@"selectedDocument.fileType"] || [keyPath isEqualToString:@"selectedDocument"]))
+	if([keyPath isEqualToString:@"textView.font"] || [keyPath isEqualToString:@"textView.fontScaleFactor"] || [keyPath isEqualToString:@"textView.themeUUID"] || [keyPath isEqualToString:@"selectedDocument.fileType"] || [keyPath isEqualToString:@"selectedDocument"])
 	{
 		// Theme notifications can arrive while OakTextView is replacing its document view.
-		dispatch_async(dispatch_get_main_queue(), ^{ [self updateTerminalTheme]; });
+		dispatch_async(dispatch_get_main_queue(), ^{ [self updateTerminalTheme]; [self updateChromeTheme]; });
 	}
 
 	OakDocument* document = self.selectedDocument;
@@ -2347,6 +2347,18 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		}
 	}
 	[[self class] scheduleSessionBackup:self];
+}
+
+- (void)updateChromeTheme
+{
+	// Chromeless layout: the content bleeds under the transparent title bar,
+	// so paint the window background with the document theme's background
+	// color and the tab bar area blends into the editor instead of showing
+	// the system title bar gray.
+	if(!self.selectedDocument.fileType)
+		return;
+	if(theme_ptr theme = self.textView.theme)
+		self.window.backgroundColor = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
 }
 
 - (void)updateTerminalTheme
