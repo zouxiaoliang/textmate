@@ -488,12 +488,17 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.layoutView = [[ProjectLayoutView alloc] initWithFrame:NSZeroRect];
 		self.layoutView.documentView = self.documentView;
 
-		NSUInteger windowStyle = (NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable);
+		NSUInteger windowStyle = (NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskFullSizeContentView);
 		self.window = [[NSWindow alloc] initWithContentRect:[NSWindow contentRectForFrameRect:[self frameRectForNewWindow] styleMask:windowStyle] styleMask:windowStyle backing:NSBackingStoreBuffered defer:NO];
 		self.window.animationBehavior  = NSWindowAnimationBehaviorDocumentWindow;
 		self.window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
 		self.window.delegate           = self;
 		self.window.releasedWhenClosed = NO;
+		// Chromeless layout: the tab bar lives in the title bar and the window
+		// content bleeds under it, so the standard title bar chrome is hidden
+		// and the traffic lights float over the content, Claude-desktop style.
+		self.window.titlebarAppearsTransparent = YES;
+		self.window.titleVisibility            = NSWindowTitleHidden;
 
 		_titlebarViewController = [[NSTitlebarAccessoryViewController alloc] init];
 		// AppKit otherwise forces the accessory to its standard 36pt height on macOS 26+
@@ -552,8 +557,16 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		OakAddAutoLayoutViewsToSuperview(@[ self.terminalPanelController.view ], self.window.contentView);
 		self.window.initialFirstResponder = self.textView;
 
-		[self.window.contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[view]|" options:0 metrics:nil views:@{ @"view": self.terminalPanelController.view }]];
-		[self.window.contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[view]|" options:0 metrics:nil views:@{ @"view": self.terminalPanelController.view }]];
+		// With fullSizeContentView the content view extends under the title
+		// bar; anchor the top edge to the safe area so the editor content
+		// starts below the tab bar instead of behind it.
+		NSView* contentView = self.window.contentView;
+		NSLayoutAnchor* safeAreaTop = contentView.safeAreaLayoutGuide.topAnchor;
+		[contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[view]|" options:0 metrics:nil views:@{ @"view": self.terminalPanelController.view }]];
+		[NSLayoutConstraint activateConstraints:@[
+			[self.terminalPanelController.view.topAnchor constraintEqualToAnchor:safeAreaTop],
+			[contentView.bottomAnchor constraintEqualToAnchor:self.terminalPanelController.view.bottomAnchor],
+		]];
 
 		_arrayController = [[NSArrayController alloc] init];
 		[_arrayController bind:NSContentBinding toObject:self withKeyPath:@"documents" options:nil];
