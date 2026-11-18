@@ -893,7 +893,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSSize)intrinsicContentSize
 {
-	return NSMakeSize(NSViewNoIntrinsicMetric, self.isWindowTitleBar ? 28 : 24);
+	return NSMakeSize(NSViewNoIntrinsicMetric, self.isWindowTitleBar ? 30 : 24);
 }
 
 - (NSColor*)titleBarSurfaceColor

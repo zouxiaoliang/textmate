@@ -555,6 +555,21 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 		NSView* contentView = self.window.contentView;
 		OakAddAutoLayoutViewsToSuperview(@[ self.tabBarView, self.terminalPanelController.view ], contentView);
+		// Match the bar to the native traffic lights. AppKit can reset their
+		// frames when a tab changes the window title, so leave the buttons alone.
+		if(NSButton* closeButton = [self.window standardWindowButton:NSWindowCloseButton])
+		{
+			NSRect contentBounds = [contentView convertRect:contentView.bounds toView:nil];
+			NSRect buttonBounds = [closeButton convertRect:closeButton.bounds toView:nil];
+			CGFloat height = 2 * (NSMaxY(contentBounds) - NSMidY(buttonBounds));
+			if(height >= 24 && height <= 36)
+			{
+				NSLayoutConstraint* heightConstraint = [self.tabBarView.heightAnchor constraintEqualToConstant:height];
+				// The explicit zero-height constraint takes precedence in full screen.
+				heightConstraint.priority = NSLayoutPriorityRequired - 1;
+				heightConstraint.active = YES;
+			}
+		}
 		self.hiddenTabBarHeight = [self.tabBarView.heightAnchor constraintEqualToConstant:0];
 		self.window.initialFirstResponder = self.textView;
 
