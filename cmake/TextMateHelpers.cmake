@@ -72,8 +72,20 @@ function(textmate_codesign TARGET IDENTITY)
     list(APPEND _flags --entitlements "${_CS_ENTITLEMENTS}")
   endif()
   add_custom_command(TARGET ${TARGET} POST_BUILD
+    # exFAT volumes store extended attributes as AppleDouble (._*) files; the
+    # kernel attaches com.apple.provenance to freshly linked binaries, and
+    # codesign itself writes com.apple.cs.* xattrs when signing. Both appear
+    # as sidecars inside the bundle, and the next codesign run treats stale
+    # sidecars as unsigned subcomponents and refuses. So: strip, sign, strip
+    # (drop the sidecars the first sign created), sign again, strip once more
+    # so the bundle ships clean.
+    COMMAND ${CMAKE_COMMAND} -DBUNDLE_DIR=$<TARGET_BUNDLE_DIR:${TARGET}> -P ${CMAKE_SOURCE_DIR}/cmake/strip_appledouble.cmake
     COMMAND xcrun codesign --sign "${IDENTITY}" ${_flags}
       "$<TARGET_BUNDLE_DIR:${TARGET}>"
+    COMMAND ${CMAKE_COMMAND} -DBUNDLE_DIR=$<TARGET_BUNDLE_DIR:${TARGET}> -P ${CMAKE_SOURCE_DIR}/cmake/strip_appledouble.cmake
+    COMMAND xcrun codesign --sign "${IDENTITY}" ${_flags}
+      "$<TARGET_BUNDLE_DIR:${TARGET}>"
+    COMMAND ${CMAKE_COMMAND} -DBUNDLE_DIR=$<TARGET_BUNDLE_DIR:${TARGET}> -P ${CMAKE_SOURCE_DIR}/cmake/strip_appledouble.cmake
     COMMENT "Codesign: ${TARGET}")
 endfunction()
 

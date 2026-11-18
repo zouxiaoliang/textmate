@@ -4,9 +4,3 @@
 [submodule "Applications/TextMate/icons"]
 	path = Applications/TextMate/icons
 	url = https://github.com/textmate/document-icons.git
-[submodule "vendor/Onigmo/vendor"]
-	path = vendor/Onigmo/vendor
-	url = https://github.com/textmate/Onigmo.git
-[submodule "vendor/kvdb/vendor"]
-	path = vendor/kvdb/vendor
-	url = https://github.com/textmate/kvdb.git

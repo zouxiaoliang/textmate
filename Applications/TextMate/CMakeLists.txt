@@ -63,6 +63,24 @@ add_custom_command(TARGET TextMate POST_BUILD
 set_target_properties(TextMate PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist")
 
+# The full TextMate bundles are optional; keep basic highlighting available on
+# first launch and offline. User-installed bundles are indexed before these.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(_builtin_bundle_dir "${CMAKE_CURRENT_BINARY_DIR}/builtin-bundles")
+set(_builtin_bundle_stamp "${_builtin_bundle_dir}/generated.stamp")
+add_custom_command(OUTPUT "${_builtin_bundle_stamp}"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_builtin_bundle.py" "${_builtin_bundle_dir}"
+  COMMAND ${CMAKE_COMMAND} -E touch "${_builtin_bundle_stamp}"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_builtin_bundle.py"
+  VERBATIM)
+add_custom_target(TextMateBuiltinBundles DEPENDS "${_builtin_bundle_stamp}")
+add_dependencies(TextMate TextMateBuiltinBundles)
+set_property(TARGET TextMate APPEND PROPERTY LINK_DEPENDS "${_builtin_bundle_stamp}")
+add_custom_command(TARGET TextMate POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${_builtin_bundle_dir}/Bundles"
+    "$<TARGET_BUNDLE_DIR:TextMate>/Contents/SharedSupport/Bundles")
+
 # Compile xib → nib (all xibs from TextMate and frameworks go into the app bundle)
 target_xib_sources(TextMate "English.lproj"
   resources/English.lproj/MainMenu.xib

@@ -101,6 +101,9 @@ If you already cloned without `--recursive`, fetch the submodules separately:
 git submodule update --init --recursive
 ```
 
+Onigmo and kvdb are included directly in this repository. The remaining
+submodules provide the document icons and CxxTest.
+
 ## Build Commands
 
 ```sh
@@ -138,6 +141,8 @@ Press **Cmd+Shift+P** to open the command palette — a unified fuzzy-search int
 Results are ranked by fuzzy match score. Frequently used items are boosted over time.
 
 ## Theme Editor
+
+Opening a file selects its syntax from the first line or filename extension. The app includes basic offline highlighting for C, C++, CSS, Go, HTML, JavaScript, JSON, Markdown, Objective-C, Python, Rust, shell scripts, Swift, TypeScript, and YAML. Installed language bundles provide the full grammars and take precedence over the built-in versions.
 
 Choose **View → Theme → Open Theme Editor…** or run `tm-theme-editor` to open the native macOS theme editor bundled with TextMate. Its three panes show the installed themes, color and font controls, and a live preview using TextMate's own editor, syntax highlighting, gutter, and selection rendering.
 
