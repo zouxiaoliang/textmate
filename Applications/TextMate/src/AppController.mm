@@ -20,10 +20,12 @@
 #import <OakSystem/application.h>
 #import <OakFoundation/NSString Additions.h>
 #import <OakTextView/OakDocumentView.h>
+#import <OakTextView/OakTextView.h>
 #import <MenuBuilder/MenuBuilder.h>
 #import <MenuBuilder/MBMenuDelegate.h>
 #import <Preferences/Keys.h>
 #import <Preferences/Preferences.h>
+#import <Preferences/ShortcutsPreferences.h>
 #import <Preferences/TerminalPreferences.h>
 #import <document/OakDocument.h>
 #import <document/OakDocumentController.h>
@@ -647,6 +649,8 @@ BOOL HasDocumentWindow (NSArray* windows)
 	[OakCommitWindowServer sharedInstance]; // Setup server
 
 	[LSPBridge setup];
+	[OakTextView class]; // Install editor key equivalents before capturing menu defaults.
+	ApplyMenuShortcutPreferences();
 
 	self.didFinishLaunching = YES;
 }
