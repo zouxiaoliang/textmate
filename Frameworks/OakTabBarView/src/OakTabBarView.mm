@@ -23,6 +23,14 @@ static void DisableImplicitAnimationForBlock (void(^handler)())
 // ==============
 
 static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabItem";
+static CGFloat const kTitleBarDragEdgeHeight = 12;
+static CGFloat const kTabDragDistance = 10;
+static CGFloat const kTabDragRailDistance = 40;
+
+static CGFloat LinearColorComponent(CGFloat component)
+{
+	return component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4);
+}
 
 @class OakTabView;
 
@@ -79,7 +87,9 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 
 - (NSArray*)writableTypesForPasteboard:(NSPasteboard*)aPasteboard
 {
-	return OakIsEmptyString(_path) ? @[ OakTabItemPasteboardType ] : @[ OakTabItemPasteboardType, UTTypeFileURL.identifier ];
+	// Only the private tab type. Advertising a file URL lets Finder/Desktop
+	// accept the drag (operation != None), which suppresses tear-off.
+	return @[ OakTabItemPasteboardType ];
 }
 
 - (NSPasteboardWritingOptions)writingOptionsForType:(NSString*)aType pasteboard:(NSPasteboard*)aPasteboard
@@ -132,52 +142,27 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 }
 @end
 
-// ==========
-// = OakBox =
-// ==========
-
-@interface OakBox : NSView
-@property (nonatomic) NSColor* fillColor;
-@end
-
-@implementation OakBox
-- (BOOL)wantsUpdateLayer
-{
-	return YES;
-}
-
-- (void)updateLayer
-{
-	self.layer.backgroundColor = _fillColor.CGColor;
-}
-
-- (void)drawRect:(NSRect)aRect
-{
-	[_fillColor set];
-	[NSBezierPath fillRect:aRect];
-}
-
-- (void)setFillColor:(NSColor*)color
-{
-	_fillColor = color;
-	self.needsDisplay = YES;
-}
-@end
-
 // ==================== //
 // = Status Text Link = //
 // ==================== //
 
-// The bar's trailing status message (e.g. "terminal finished"). Pure display:
-// clicks fall through to the background "new tab" area underneath.
-@interface OakTabBarStatusLabel : NSTextField
+// The title and status text leave mouse events to the bar behind them.
+@interface OakTabBarLabel : NSTextField
 @end
 
-@implementation OakTabBarStatusLabel
+@implementation OakTabBarLabel
 - (NSView*)hitTest:(NSPoint)aPoint
 {
 	return nil;
 }
+@end
+
+@interface OakAddTabButton : NSButton
+@property (nonatomic, weak) OakTabBarView* tabBar;
+@end
+
+@interface NSWindow (OakTitleBarFill)
+- (void)_zoomFill:(NSView*)sender;
 @end
 
 // ==============
@@ -206,9 +191,6 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 @property (nonatomic, readonly) BOOL shouldShowCloseButton;
 @property (nonatomic) NSArray<NSLayoutConstraint*>* overflowButtonConstraints;
 
-@property (nonatomic) OakBox* backgroundView;
-@property (nonatomic) OakBox* topBorderView;
-@property (nonatomic) OakBox* leftBorderView;
 @property (nonatomic) OakRolloverButton* closeButton;
 @property (nonatomic) OakRolloverButton* overflowButton;
 @property (nonatomic) NSTextField* textField;
@@ -217,9 +199,12 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 @property (nonatomic) NSProgressIndicator* statusSpinner;
 @property (nonatomic) NSLayoutConstraint* statusWidth;
 - (void)updateStatus;
+- (void)updateLabelAppearance;
+- (CGFloat)preferredTitleBarWidth;
 
 @property (nonatomic) NSTrackingArea* trackingArea;
-@property (nonatomic) NSPoint mouseDownLocation;
+@property (nonatomic) NSEvent* mouseDownEvent;
+@property (nonatomic) NSString* previousSelection;
 @end
 
 @interface OakTabBarView () <NSAccessibilityGroup, NSDraggingSource>
@@ -233,11 +218,27 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 @property (nonatomic) NSInteger draggedTabIndex;
 @property (nonatomic) NSInteger dropTabAtIndex;
 @property (nonatomic) NSInteger freezeTabFramesLeftOfIndex;
-@property (nonatomic, readonly) OakTabView* backgroundView;
 @property (nonatomic) NSButton* createNewTabButton;
 @property (nonatomic) NSTextField* statusTextLabel;
+@property (nonatomic) NSTextField* collapsedTitleLabel;
 @property (nonatomic) NSTrackingArea* trackingArea;
 @property (nonatomic, getter = isDragging) BOOL dragging;
+@property (nonatomic) NSPoint tabDragStart;
+@property (nonatomic) NSPoint tabDragWindowOffset;
+@property (nonatomic) BOOL tabDragLeftRail;
+@property (nonatomic) NSDictionary<NSString*, NSNumber*>* tabDragMidpoints;
+@property (nonatomic) NSString* selectionBeforeTabDrag;
+@property (nonatomic, weak) OakTabBarView* tabDragDestination;
+@property (nonatomic) NSPanel* tabDragPreview;
+- (NSColor*)titleBarInkColor;
+- (NSColor*)titleBarSurfaceColor;
+- (NSString*)selectedTabIdentifier;
+- (void)selectTabWithIdentifier:(NSString*)identifier;
+- (void)didSingleClickTabView:(OakTabView*)tabView;
+- (BOOL)canDragWindow;
+- (BOOL)shouldDragWindowFromTabWithEvent:(NSEvent*)event;
+- (void)dragWindowWithEvent:(NSEvent*)event;
+- (void)performTitlebarDoubleClick:(id)sender;
 - (void)didClickCloseButtonForTabView:(OakTabView*)tabView;
 - (void)didClickOverflorButtonForTabView:(OakTabView*)tabView;
 - (NSMenu*)menuForTabView:(OakTabView*)tabView withEvent:(NSEvent*)anEvent;
@@ -277,11 +278,14 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 		_tabBarView = tabBarView;
 
-		_backgroundView = [[OakBox alloc] initWithFrame:NSZeroRect];
-		_topBorderView  = [[OakBox alloc] initWithFrame:NSZeroRect];
-		_leftBorderView = [[OakBox alloc] initWithFrame:NSZeroRect];
-
 		_textField = OakCreateLabel();
+		if(tabBarView.isWindowTitleBar)
+		{
+			_textField.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+			_textField.lineBreakMode = NSLineBreakByTruncatingMiddle;
+			_textField.allowsDefaultTighteningForTruncation = NO;
+			_textField.alignment = NSTextAlignmentCenter;
+		}
         _statusView = [[NSView alloc] initWithFrame:NSZeroRect];
         _statusImage = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, 14, 14)];
         _statusSpinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 14, 14)];
@@ -292,17 +296,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
         _statusWidth = [_statusView.widthAnchor constraintEqualToConstant:0];
         _statusWidth.active = YES;
 
-		DisableImplicitAnimationForBlock(^{
-			_backgroundView.fillColor  = NSColor.textColor;
-			_backgroundView.alphaValue = _selected ? 0 : (_mouseInside ? 0.2 : 0.1);
-			_topBorderView.fillColor   = [NSColor colorWithCalibratedWhite:NSBlack alpha:0.25];
-			_leftBorderView.fillColor  = [NSColor colorWithCalibratedWhite:NSBlack alpha:0.25];
-
-			_textField.textColor  = NSColor.secondaryLabelColor;
-			_textField.alphaValue = _selected ? 1 : 0.5;
-		});
-
-		NSArray<NSView*>* subviews = @[ _backgroundView, _topBorderView, _leftBorderView, _textField, _statusView, _statusSpinner, self.closeButton, self.overflowButton ];
+		NSArray<NSView*>* subviews = @[ _textField, _statusView, _statusSpinner, self.closeButton, self.overflowButton ];
 		for(NSView* view in subviews)
 		{
 			view.translatesAutoresizingMaskIntoConstraints = NO;
@@ -314,21 +308,18 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		[NSWorkspace.sharedWorkspace addObserver:self forKeyPath:@"voiceOverEnabled" options:NSKeyValueObservingOptionInitial context:kOakTabViewVoiceOverContext];
 
 		NSDictionary* views = @{
-			@"background": _backgroundView,
-			@"topBorder":  _topBorderView,
-			@"leftBorder": _leftBorderView,
-
 			@"close":      self.closeButton,
 			@"title":      self.textField,
             @"status":     self.statusView,
 			@"overflow":   self.overflowButton,
 		};
 
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[leftBorder(==1@75)][topBorder]|" options:NSLayoutFormatAlignAllTop metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[topBorder(==1@75)][background]|" options:NSLayoutFormatAlignAllLeft|NSLayoutFormatAlignAllRight metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[leftBorder]|" options:0 metrics:nil views:views]];
-
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-(3@53)-[close]-(>=3@53)-[status][title]-(>=6@53)-|" options:0 metrics:nil views:views]];
+		// iTerm2 Minimal layout: title centered with breathing room, close
+		// button tucked at the trailing edge (revealed on hover / when modified).
+		NSString* horizontalLayout = tabBarView.isWindowTitleBar
+			? @"H:|-(8@53)-[status]-(>=0@53)-[title]-(>=4@53)-[close]-(4@53)-|"
+			: @"H:|-(8@53)-[status][title]-(>=4@53)-[close]-(4@53)-|";
+		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:horizontalLayout options:0 metrics:nil views:views]];
 
 		_overflowButtonConstraints = [NSLayoutConstraint constraintsWithVisualFormat:@"H:[title]-(>=3@53)-[overflow]" options:0 metrics:nil views:views];
 		[NSLayoutConstraint deactivateConstraints:_overflowButtonConstraints];
@@ -342,12 +333,20 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		]];
 		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[overflow]|" options:0 metrics:nil views:views]];
 
-		[_textField setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+		[_textField setContentHuggingPriority:tabBarView.isWindowTitleBar ? NSLayoutPriorityFittingSizeCompression - 1 : NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
 		[_textField setContentCompressionResistancePriority:NSLayoutPriorityFittingSizeCompression+2 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
 		NSLayoutConstraint* centerTitleConstraint = [NSLayoutConstraint constraintWithItem:_textField attribute:NSLayoutAttributeCenterX relatedBy:NSLayoutRelationEqual toItem:self attribute:NSLayoutAttributeCenterX multiplier:1 constant:0];
 		centerTitleConstraint.priority = NSLayoutPriorityFittingSizeCompression+1;
 		[self addConstraint:centerTitleConstraint];
+		if(tabBarView.isWindowTitleBar)
+		{
+			// Use the available width rather than the text field's intrinsic size;
+			// the latter can truncate even short filenames by a fraction of a point.
+			NSLayoutConstraint* fillTitle = [_textField.widthAnchor constraintEqualToAnchor:self.widthAnchor];
+			fillTitle.priority = NSLayoutPriorityFittingSizeCompression;
+			fillTitle.active = YES;
+		}
 
 		[NSLayoutConstraint activateConstraints:@[
             [_statusSpinner.widthAnchor constraintEqualToConstant:14],
@@ -388,8 +387,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		return;
 
 	_mouseInside = flag;
-	if(!self.isSelected && _tabItem)
-		self.backgroundView.alphaValue = _mouseInside ? 0.2 : 0.1;
+	if(self.tabBarView.isWindowTitleBar)
+		self.tabBarView.needsDisplay = YES;
 }
 
 - (void)setModified:(BOOL)flag
@@ -405,9 +404,13 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 	_selected = flag;
 
-	self.textField.alphaValue      = _selected ? 1 : 0.5;
-	self.backgroundView.alphaValue = _selected ? 0 : (_mouseInside ? 0.2 : 0.1);
-	self.topBorderView.alphaValue  = _selected ? 0 : 1;
+	if(self.tabBarView.isWindowTitleBar)
+	{
+		[self updateLabelAppearance];
+		self.tabBarView.needsDisplay = YES;
+	}
+	else
+		self.textField.alphaValue = _selected ? 1 : 0.5;
 }
 
 - (void)setTabItem:(OakTabItem*)tabItem
@@ -430,6 +433,10 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 	if(_tabItem)
 	{
+		if(self.tabBarView.isWindowTitleBar)
+			[self updateLabelAppearance];
+		else
+			self.textField.alphaValue = _selected ? 1 : 0.5;
 		self.accessibilityElement                     = YES;
 		self.closeButton.cell.accessibilityElement    = YES;
 		self.overflowButton.cell.accessibilityElement = YES;
@@ -441,8 +448,6 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		self.overflowButton.cell.accessibilityElement = NO;
 
 		self.textField.alphaValue      = 0.0;
-		self.backgroundView.alphaValue = 0.1;
-		self.topBorderView.alphaValue  = 1;
 		self.overflowButtonVisible     = NO;
         [self updateStatus];
 	}
@@ -601,15 +606,45 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (void)windowDidChangeMainOrKey:(NSNotification*)aNotification
 {
+	[self updateLabelAppearance];
+}
+
+- (void)updateLabelAppearance
+{
 	BOOL isActive = self.window.isKeyWindow || self.window.isMainWindow || self.isInFullScreenMode;
-	_textField.textColor = isActive ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
+	if(self.tabBarView.isWindowTitleBar)
+	{
+		NSColor* ink = [self.tabBarView titleBarInkColor];
+		CGFloat opacity = _selected ? (isActive ? 1.0 : 0.84) : (isActive ? 0.74 : 0.62);
+		_textField.textColor = [ink colorWithAlphaComponent:opacity];
+		_textField.alphaValue = 1;
+		_closeButton.contentTintColor = ink;
+		_overflowButton.contentTintColor = ink;
+	}
+	else
+	{
+		_textField.textColor = isActive ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
+	}
+}
+
+- (CGFloat)preferredTitleBarWidth
+{
+	// Reserve room on both sides so the label stays centered next to the close button.
+	return ceil([_textField.stringValue sizeWithAttributes:@{ NSFontAttributeName: _textField.font }].width) + 2 * MAX(24, 8 + _statusWidth.constant);
 }
 
 - (NSView*)hitTest:(NSPoint)aPoint
 {
-	// This is required to receive menuForEvent: when control-clicking the text field (right click works)
 	NSView* res = [super hitTest:aPoint];
-	return res == _textField ? self : res;
+	return [res isKindOfClass:NSButton.class] || !res ? res : self;
+}
+
+- (BOOL)mouseDownCanMoveWindow
+{
+	// YES would let the window server steal tab reorder/tear-off drags as native
+	// window moves before -mouseDragged: can start a drag session. Blank-area
+	// window moves go through -mouseDown: → performWindowDragWithEvent: instead.
+	return NO;
 }
 
 - (BOOL)acceptsFirstMouse:(NSEvent*)anEvent
@@ -619,7 +654,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (BOOL)shouldDelayWindowOrderingForEvent:(NSEvent*)anEvent
 {
-	return YES;
+	return !self.tabBarView.isWindowTitleBar;
 }
 
 - (void)mouseEntered:(NSEvent*)anEvent
@@ -634,7 +669,13 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (void)mouseDown:(NSEvent*)anEvent
 {
-	_mouseDownLocation = anEvent.locationInWindow;
+	self.mouseDownEvent = anEvent;
+	self.previousSelection = nil;
+	if(self.tabBarView.isWindowTitleBar && !self.isSelected && anEvent.clickCount == 1 && !(anEvent.modifierFlags & NSEventModifierFlagOption))
+	{
+		self.previousSelection = [self.tabBarView selectedTabIdentifier];
+		[self.tabBarView didSingleClickTabView:self];
+	}
 }
 
 - (void)otherMouseDown:(NSEvent*)anEvent
@@ -644,24 +685,39 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (void)mouseDragged:(NSEvent*)anEvent
 {
-	if(self.dragAction && !NSEqualPoints(_mouseDownLocation, NSZeroPoint) && hypot(_mouseDownLocation.x - anEvent.locationInWindow.x, _mouseDownLocation.y - anEvent.locationInWindow.y) >= 2.5)
+	NSEvent* downEvent = self.mouseDownEvent;
+	if(!downEvent)
+		return;
+	if([self.tabBarView shouldDragWindowFromTabWithEvent:anEvent])
+	{
+		self.mouseDownEvent = nil;
+		[self.tabBarView selectTabWithIdentifier:self.previousSelection];
+		self.previousSelection = nil;
+		[self.tabBarView dragWindowWithEvent:anEvent];
+		return;
+	}
+	NSPoint start = downEvent.locationInWindow, end = anEvent.locationInWindow;
+	if(self.dragAction && hypot(start.x - end.x, start.y - end.y) >= kTabDragDistance)
 	{
 		[NSApp sendAction:self.dragAction to:self.target from:self];
-		_mouseDownLocation = NSZeroPoint;
+		self.mouseDownEvent = nil;
+		self.previousSelection = nil;
 	}
-	// The bar's blank area doubles as the title bar: past a small dead zone,
-	// dragging it moves the window (a click or double-click still reaches mouseUp).
-	else if(!self.tabItem && self.tabBarView && !NSEqualPoints(_mouseDownLocation, NSZeroPoint) && hypot(_mouseDownLocation.x - anEvent.locationInWindow.x, _mouseDownLocation.y - anEvent.locationInWindow.y) >= 2.5)
-		[self.window performWindowDragWithEvent:anEvent];
 }
 
 - (void)mouseUp:(NSEvent*)anEvent
 {
-	if(NSEqualPoints(_mouseDownLocation, NSZeroPoint)) // Ignore mouse up after a dragging session
+	NSEvent* downEvent = self.mouseDownEvent;
+	self.mouseDownEvent = nil;
+	self.previousSelection = nil;
+	if(!downEvent)
 		return;
-	else if(anEvent.clickCount == 1 && !self.isSelected && hypot(_mouseDownLocation.x - anEvent.locationInWindow.x, _mouseDownLocation.y - anEvent.locationInWindow.y) < 2.5)
+	NSPoint start = downEvent.locationInWindow, end = anEvent.locationInWindow;
+	if(hypot(start.x - end.x, start.y - end.y) >= kTabDragDistance)
+		return;
+	if(!self.isSelected && (anEvent.clickCount == 1 || self.tabBarView.isWindowTitleBar))
 		[NSApp sendAction:self.action to:self.target from:self];
-	else if(anEvent.clickCount == 2)
+	if(anEvent.clickCount == 2 && self.doubleAction)
 		[NSApp sendAction:self.doubleAction to:self.target from:self];
 }
 
@@ -702,27 +758,71 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSImage*)dragImage
 {
-	NSRect bounds = self.backgroundView.frame;
+	NSRect bounds = self.bounds;
 	if(NSIsEmptyRect(bounds))
 		return nil;
 
 	NSImage* image = [[NSImage alloc] initWithSize:bounds.size];
 	[image lockFocusFlipped:self.isFlipped];
 
-	_overflowButton.hidden     = YES;
-	_textField.alphaValue      = 1.0;
-	_backgroundView.alphaValue = 0.1;
-	_topBorderView.alphaValue  = 1;
+	_overflowButton.hidden = YES;
+	_textField.alphaValue  = 1.0;
+	_textField.textColor   = self.tabBarView.isWindowTitleBar ? [self.tabBarView titleBarInkColor] : NSColor.labelColor;
+	if(self.tabBarView.isWindowTitleBar)
+	{
+		[[self.tabBarView titleBarSurfaceColor] setFill];
+		NSRectFill(bounds);
+	}
 
 	[self displayRectIgnoringOpacity:bounds inContext:NSGraphicsContext.currentContext];
 
-	_overflowButton.hidden     = !_overflowButtonVisible;
-	_textField.alphaValue      = _selected ? 1 : 0.5;
-	_backgroundView.alphaValue = _selected ? 0 : (_mouseInside ? 0.2 : 0.1);
-	_topBorderView.alphaValue  = _selected ? 0 : 1;
+	_overflowButton.hidden = !_overflowButtonVisible;
+	[self updateLabelAppearance];
+	if(!self.tabBarView.isWindowTitleBar)
+		_textField.alphaValue = _selected ? 1 : 0.5;
 
 	[image unlockFocus];
 	return image;
+}
+@end
+
+@implementation OakAddTabButton
+- (BOOL)acceptsFirstMouse:(NSEvent*)event
+{
+	return self.tabBar.isWindowTitleBar || [super acceptsFirstMouse:event];
+}
+
+- (void)mouseDown:(NSEvent*)event
+{
+	if(!self.isEnabled || ![self.tabBar canDragWindow])
+	{
+		[super mouseDown:event];
+		return;
+	}
+
+	[self highlight:YES];
+	NSEventMask mask = NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp;
+	while(NSEvent* nextEvent = [self.window nextEventMatchingMask:mask])
+	{
+		NSPoint point = [self convertPoint:nextEvent.locationInWindow fromView:nil];
+		BOOL inside = NSMouseInRect(point, self.bounds, self.isFlipped);
+		if(nextEvent.type == NSEventTypeLeftMouseUp)
+		{
+			[self highlight:NO];
+			if(inside)
+				[self sendAction:self.action to:self.target];
+			return;
+		}
+		NSPoint start = event.locationInWindow, end = nextEvent.locationInWindow;
+		if(hypot(start.x - end.x, start.y - end.y) >= kTabDragDistance)
+		{
+			[self highlight:NO];
+			[self.tabBar dragWindowWithEvent:nextEvent];
+			return;
+		}
+		[self highlight:inside];
+	}
+	[self highlight:NO];
 }
 @end
 
@@ -783,11 +883,6 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		_draggedTabIndex = -1;
 		_dropTabAtIndex  = -1;
 
-		_backgroundView = [[OakTabView alloc] initWithFrame:NSZeroRect tabItem:nil parent:nil];
-		_backgroundView.target       = self;
-		_backgroundView.doubleAction = @selector(performTitlebarDoubleClick:);
-		[self addSubview:_backgroundView positioned:NSWindowBelow relativeTo:nil];
-
 		[self addSubview:self.createNewTabButton positioned:NSWindowAbove relativeTo:nil];
 		[self addSubview:self.statusTextLabel positioned:NSWindowAbove relativeTo:self.createNewTabButton];
 
@@ -798,7 +893,104 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSSize)intrinsicContentSize
 {
-	return NSMakeSize(NSViewNoIntrinsicMetric, 32);
+	return NSMakeSize(NSViewNoIntrinsicMetric, self.isWindowTitleBar ? 28 : 24);
+}
+
+- (NSColor*)titleBarSurfaceColor
+{
+	return self.titleBarBackgroundColor ?: NSColor.windowBackgroundColor;
+}
+
+- (NSColor*)titleBarInkColor
+{
+	__block NSColor* rgb;
+	[self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+		rgb = [[self titleBarSurfaceColor] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+	}];
+	if(!rgb)
+		return NSColor.labelColor;
+	CGFloat luminance = 0.2126 * LinearColorComponent(rgb.redComponent) + 0.7152 * LinearColorComponent(rgb.greenComponent) + 0.0722 * LinearColorComponent(rgb.blueComponent);
+	return luminance > 0.179 ? NSColor.blackColor : NSColor.whiteColor;
+}
+
+- (void)updateTitleBarAppearance
+{
+	if(!self.isWindowTitleBar)
+		return;
+	NSColor* ink = [self titleBarInkColor];
+	_createNewTabButton.contentTintColor = ink;
+	_collapsedTitleLabel.textColor = [ink colorWithAlphaComponent:0.88];
+	for(OakTabFrame* frame in _currentLayout)
+		[frame.tabItem.tabView updateLabelAppearance];
+	self.needsDisplay = YES;
+}
+
+- (void)setTitleBarBackgroundColor:(NSColor*)color
+{
+	if(_titleBarBackgroundColor == color || [_titleBarBackgroundColor isEqual:color])
+		return;
+	_titleBarBackgroundColor = color;
+	[self updateTitleBarAppearance];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+	[super viewDidChangeEffectiveAppearance];
+	[self updateTitleBarAppearance];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+	[super drawRect:dirtyRect];
+	if(!self.isWindowTitleBar)
+		return;
+
+	NSColor* surface = [self titleBarSurfaceColor];
+	NSColor* ink = [self titleBarInkColor];
+	BOOL hasMultipleTabs = _tabItems.count > 1;
+	[surface setFill];
+	NSRectFill(dirtyRect);
+	if(!hasMultipleTabs && _dropTabAtIndex < 0)
+		return;
+	[[ink colorWithAlphaComponent:0.045] setFill];
+	NSRectFillUsingOperation(dirtyRect, NSCompositingOperationSourceOver);
+
+	// The selected tab uses the editor background. The dividing line rises up
+	// its two sides, leaving a gap where the tab joins the editor.
+	CGFloat pixel = 1.0 / (self.window.backingScaleFactor ?: 1);
+	NSRect selectedRect = NSZeroRect;
+	for(OakTabFrame* frame in _currentLayout)
+	{
+		OakTabView* view = frame.tabItem.tabView;
+		if(view.hidden || frame.width <= 0)
+			continue;
+		NSRect rect = NSIntersectionRect(NSMakeRect(NSMinX(view.frame), NSMinY(self.bounds), NSWidth(view.frame), NSHeight(self.bounds)), self.bounds);
+		if(frame.tabItem.isSelected)
+		{
+			selectedRect = rect;
+			[surface setFill];
+			NSRectFill(NSIntersectionRect(rect, dirtyRect));
+			continue;
+		}
+		BOOL placeholder = ![_tabItems containsObject:frame.tabItem];
+		if(placeholder || view.isMouseInside)
+		{
+			[[ink colorWithAlphaComponent:placeholder ? 0.11 : 0.05] setFill];
+			NSRectFillUsingOperation(NSIntersectionRect(rect, dirtyRect), NSCompositingOperationSourceOver);
+		}
+	}
+	[[ink colorWithAlphaComponent:0.18] setFill];
+	CGFloat bottom = NSMinY(self.bounds), left = NSMinX(self.bounds), right = NSMaxX(self.bounds);
+	if(NSIsEmptyRect(selectedRect))
+	{
+		NSRectFillUsingOperation(NSMakeRect(left, bottom, right - left, pixel), NSCompositingOperationSourceOver);
+		return;
+	}
+	CGFloat selectionLeft = NSMinX(selectedRect), selectionRight = NSMaxX(selectedRect);
+	NSRectFillUsingOperation(NSMakeRect(left, bottom, selectionLeft - left, pixel), NSCompositingOperationSourceOver);
+	NSRectFillUsingOperation(NSMakeRect(selectionRight, bottom, right - selectionRight, pixel), NSCompositingOperationSourceOver);
+	NSRectFillUsingOperation(NSMakeRect(selectionLeft - pixel, bottom + pixel, pixel, NSHeight(self.bounds) - pixel), NSCompositingOperationSourceOver);
+	NSRectFillUsingOperation(NSMakeRect(selectionRight, bottom + pixel, pixel, NSHeight(self.bounds) - pixel), NSCompositingOperationSourceOver);
 }
 
 - (BOOL)mouseDownCanMoveWindow
@@ -806,11 +998,90 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	return NO;
 }
 
+- (NSRect)_opaqueRectForWindowMoveWhenInTitlebar
+{
+	// A full-size content view still overlaps the native title bar. AppKit's
+	// window-move hit testing uses this rect separately from -hitTest: and
+	// -mouseDownCanMoveWindow. Cover the strip so only the gestures we choose
+	// are handed back to AppKit as window moves, as in iTerm's Minimal bar.
+	return self.isWindowTitleBar ? self.bounds : NSZeroRect;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent*)event
+{
+	return self.isWindowTitleBar;
+}
+
+- (BOOL)canDragWindow
+{
+	NSWindow* window = self.window;
+	return self.isWindowTitleBar && window.isMovable && !window.attachedSheet && !(window.styleMask & NSWindowStyleMaskFullScreen);
+}
+
+- (BOOL)shouldDragWindowFromTabWithEvent:(NSEvent*)event
+{
+	if(![self canDragWindow])
+		return NO;
+	if(event.modifierFlags & NSEventModifierFlagOption)
+		return YES;
+	return self.countOfVisibleTabs == 1;
+}
+
+- (NSInteger)countOfVisibleTabs
+{
+	NSInteger count = 0;
+	for(OakTabFrame* frame in _currentLayout)
+		if(frame.width > 0 && [_tabItems containsObject:frame.tabItem])
+			++count;
+	return count;
+}
+
+- (void)dragWindowWithEvent:(NSEvent*)event
+{
+	[self.window makeKeyAndOrderFront:nil];
+	[self.window performWindowDragWithEvent:event];
+}
+
+- (NSView*)hitTest:(NSPoint)aPoint
+{
+	NSView* hit = [super hitTest:aPoint];
+	if([hit isKindOfClass:OakTabView.class] && [self canDragWindow])
+	{
+		NSPoint local = [self convertPoint:aPoint fromView:self.superview];
+		if(NSMaxY(self.bounds) - local.y < kTitleBarDragEdgeHeight)
+			return self;
+	}
+	return hit;
+}
+
+- (void)mouseDown:(NSEvent*)anEvent
+{
+	if([self canDragWindow])
+	{
+		if(anEvent.clickCount == 2)
+			[self performTitlebarDoubleClick:self];
+		else
+			[self dragWindowWithEvent:anEvent];
+	}
+	else if(!self.isWindowTitleBar && anEvent.clickCount == 2 && [_delegate respondsToSelector:@selector(tabBarViewDidDoubleClick:)])
+	{
+		[_delegate tabBarViewDidDoubleClick:self];
+	}
+}
+
+- (NSMenu*)menuForEvent:(NSEvent*)anEvent
+{
+	_tag = -1;
+	return [_delegate respondsToSelector:@selector(menuForTabBarView:)] ? [_delegate menuForTabBarView:self] : nil;
+}
+
 - (NSButton*)createNewTabButton
 {
 	if(!_createNewTabButton)
 	{
-		_createNewTabButton = [[NSButton alloc] initWithFrame:NSMakeRect(0, 2, 26, 20)];
+		OakAddTabButton* button = [[OakAddTabButton alloc] initWithFrame:NSMakeRect(0, 2, 26, 20)];
+		button.tabBar = self;
+		_createNewTabButton = button;
 		_createNewTabButton.accessibilityLabel = @"Create new tab";
 		_createNewTabButton.image      = [NSImage imageNamed:NSImageNameAddTemplate];
 		_createNewTabButton.bordered   = NO;
@@ -818,6 +1089,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		_createNewTabButton.toolTip    = @"Create new tab";
 		_createNewTabButton.action     = @selector(newTab:);
 		_createNewTabButton.target     = self;
+		if(self.isWindowTitleBar)
+			button.contentTintColor = [self titleBarInkColor];
 	}
 	return _createNewTabButton;
 }
@@ -826,7 +1099,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 {
 	if(!_statusTextLabel)
 	{
-		_statusTextLabel                 = [[OakTabBarStatusLabel alloc] initWithFrame:NSZeroRect];
+		_statusTextLabel                 = [[OakTabBarLabel alloc] initWithFrame:NSZeroRect];
 		_statusTextLabel.editable        = NO;
 		_statusTextLabel.bezeled         = NO;
 		_statusTextLabel.drawsBackground = NO;
@@ -850,9 +1123,59 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	[self updateToLayout:[self makeLayout]];
 }
 
+- (void)setCollapsedTitle:(NSString*)title
+{
+	if(_collapsedTitle == title || [_collapsedTitle isEqualToString:title])
+		return;
+	_collapsedTitle = [title copy];
+	if(title && !_collapsedTitleLabel)
+	{
+		_collapsedTitleLabel = [[OakTabBarLabel alloc] initWithFrame:NSZeroRect];
+		_collapsedTitleLabel.editable = NO;
+		_collapsedTitleLabel.selectable = NO;
+		_collapsedTitleLabel.bordered = NO;
+		_collapsedTitleLabel.drawsBackground = NO;
+		_collapsedTitleLabel.alignment = NSTextAlignmentCenter;
+		_collapsedTitleLabel.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightMedium];
+		_collapsedTitleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+		[self addSubview:_collapsedTitleLabel positioned:NSWindowBelow relativeTo:_createNewTabButton];
+		[self updateTitleBarAppearance];
+	}
+	_collapsedTitleLabel.stringValue = title ?: @"";
+	[self updateToLayout:[self makeLayout]];
+}
+
+- (void)setDragging:(BOOL)dragging
+{
+	if(_dragging == dragging)
+		return;
+	_dragging = dragging;
+	if(_collapsedTitle)
+		[self updateToLayout:[self makeLayout]];
+}
+
 - (NSUInteger)selectedTabIndex
 {
 	return [_tabItems indexOfObjectPassingTest:^BOOL(OakTabItem* tabItem, NSUInteger index, BOOL* stop){ return tabItem.isSelected; }];
+}
+
+- (NSString*)selectedTabIdentifier
+{
+	NSUInteger index = self.selectedTabIndex;
+	return index == NSNotFound ? nil : _tabItems[index].identifier;
+}
+
+- (void)selectTabWithIdentifier:(NSString*)identifier
+{
+	if(!identifier)
+		return;
+	NSUInteger index = [_tabItems indexOfObjectPassingTest:^BOOL(OakTabItem* item, NSUInteger index, BOOL* stop){ return [item.identifier isEqualToString:identifier]; }];
+	if(index != NSNotFound && index != self.selectedTabIndex)
+	{
+		self.selectedTabIndex = index;
+		if([_delegate respondsToSelector:@selector(tabBarView:shouldSelectIndex:)])
+			[_delegate tabBarView:self shouldSelectIndex:index];
+	}
 }
 
 - (void)setDraggedTabIndex:(NSInteger)newDraggedTabIndex
@@ -1073,23 +1396,28 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (void)newTab:(id)sender
 {
-	if([_delegate respondsToSelector:@selector(tabBarViewDidDoubleClick:)])
+	if([_delegate respondsToSelector:@selector(newTabInTabBar:)])
+		[_delegate newTabInTabBar:self];
+	else if([_delegate respondsToSelector:@selector(tabBarViewDidDoubleClick:)])
 		[_delegate tabBarViewDidDoubleClick:self];
 }
 
-// The chromeless layout leaves no visible title bar outside the tab bar, so the
-// bar's blank area doubles as the title bar: double-clicking it performs the
-// system title bar action (AppleActionOnDoubleClick, Zoom by default).
+// The blank part of the tab bar serves as the window title bar.
 - (void)performTitlebarDoubleClick:(id)sender
 {
-	NSString* action = [NSUserDefaults.standardUserDefaults stringForKey:@"AppleActionOnDoubleClick"] ?: @"Zoom";
+	NSString* action = [NSUserDefaults.standardUserDefaults stringForKey:@"AppleActionOnDoubleClick"];
 	NSWindow* window = self.window;
 	if([action isEqualToString:@"Minimize"])
-		[window miniaturize:sender];
-	else if([action isEqualToString:@"Fill Screen"] || [action isEqualToString:@"Fullscreen"])
-		[window toggleFullScreen:sender];
-	else
-		[window zoom:sender];
+		[window performMiniaturize:sender];
+	else if([action isEqualToString:@"Fill"] || [action isEqualToString:@"Fill Screen"])
+	{
+		if([window respondsToSelector:@selector(_zoomFill:)])
+			[window _zoomFill:window.contentView.superview];
+		else if(NSScreen* screen = window.screen)
+			[window setFrame:screen.visibleFrame display:YES animate:YES];
+	}
+	else if(!action || [action isEqualToString:@"Maximize"] || [action isEqualToString:@"Zoom"])
+		[window performZoom:sender];
 }
 
 - (void)performClose:(id)sender
@@ -1108,14 +1436,35 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (void)didDragTabView:(OakTabView*)tabView
 {
+	NSEvent* dragEvent = self.window.currentEvent;
+	NSUInteger index = [_tabItems indexOfObject:tabView.tabItem];
+	if(!dragEvent || !tabView.mouseDownEvent || index == NSNotFound)
+		return;
+
 	NSDraggingItem* dragItem = [[NSDraggingItem alloc] initWithPasteboardWriter:tabView.tabItem];
 	if(NSImage* dragImage = tabView.dragImage)
-		[dragItem setDraggingFrame:[self convertRect:tabView.backgroundView.frame fromView:tabView] contents:dragImage];
+		[dragItem setDraggingFrame:[self convertRect:tabView.bounds fromView:tabView] contents:dragImage];
 
-	self.draggedTabIndex = [_tabItems indexOfObject:tabView.tabItem] == NSNotFound ? -1 : [_tabItems indexOfObject:tabView.tabItem];
-	self.dropTabAtIndex  = _draggedTabIndex+1;
+	self.tabDragStart = [self.window convertPointToScreen:tabView.mouseDownEvent.locationInWindow];
+	self.tabDragWindowOffset = NSMakePoint(_tabDragStart.x - NSMinX(self.window.frame), _tabDragStart.y - NSMaxY(self.window.frame));
+	self.tabDragLeftRail = NO;
+	self.selectionBeforeTabDrag = tabView.previousSelection;
+	if(self.isWindowTitleBar)
+	{
+		NSMutableDictionary* midpoints = [NSMutableDictionary dictionary];
+		for(OakTabFrame* frame in _currentLayout)
+		{
+			if(frame.width > 0 && frame.tabItem != tabView.tabItem)
+				midpoints[frame.tabItem.identifier] = @(NSMidX(frame.tabItem.tabView.frame));
+		}
+		self.tabDragMidpoints = midpoints;
+	}
+	self.draggedTabIndex = index;
+	self.dropTabAtIndex = index;
 
-	[self beginDraggingSessionWithItems:@[ dragItem ] event:self.window.currentEvent source:self];
+	NSDraggingSession* session = [self beginDraggingSessionWithItems:@[ dragItem ] event:dragEvent source:self];
+	if(self.isWindowTitleBar)
+		session.animatesToStartingPositionsOnCancelOrFail = NO;
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession*)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context
@@ -1123,9 +1472,122 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	return context == NSDraggingContextOutsideApplication ? (NSDragOperationCopy|NSDragOperationGeneric) : (NSDragOperationCopy|NSDragOperationMove|NSDragOperationLink);
 }
 
+- (NSPoint)pointInBarFromScreen:(NSPoint)screenPoint
+{
+	return [self convertPoint:[self.window convertPointFromScreen:screenPoint] fromView:nil];
+}
+
+- (BOOL)isTabDragOnRailAtPoint:(NSPoint)screenPoint
+{
+	if(!self.isWindowTitleBar)
+		return NO;
+	if(fabs(screenPoint.y - _tabDragStart.y) > kTabDragRailDistance)
+		self.tabDragLeftRail = YES;
+	return !_tabDragLeftRail;
+}
+
+- (NSPoint)topLeftForTabDragAtPoint:(NSPoint)screenPoint
+{
+	return NSMakePoint(screenPoint.x - _tabDragWindowOffset.x, screenPoint.y - _tabDragWindowOffset.y);
+}
+
+- (NSInteger)railDropIndexAtPoint:(NSPoint)point
+{
+	// Use the positions from before moving the placeholder. Otherwise moving
+	// the placeholder can put the same pointer back on the previous slot.
+	NSInteger dropIndex = _draggedTabIndex;
+	for(NSUInteger i = 0; i < _tabItems.count; ++i)
+	{
+		if(NSNumber* midpoint = _tabDragMidpoints[_tabItems[i].identifier])
+		{
+			if(point.x < midpoint.doubleValue)
+				return i;
+			dropIndex = i + 1;
+		}
+	}
+	return dropIndex;
+}
+
+- (void)updateTabDragPreviewAtPoint:(NSPoint)screenPoint
+{
+	if(!self.isWindowTitleBar || self.draggedTabIndex < 0 || ![_delegate respondsToSelector:@selector(tabBarView:tearOffPreviewForTabAtIndex:)])
+		return;
+	OakTabBarView* destination = self.tabDragDestination;
+	if(NSPointInRect([self pointInBarFromScreen:screenPoint], self.bounds) || (destination && NSPointInRect([destination pointInBarFromScreen:screenPoint], destination.bounds)))
+	{
+		[_tabDragPreview orderOut:nil];
+		return;
+	}
+	if(!_tabDragPreview)
+	{
+		NSImage* image = [_delegate tabBarView:self tearOffPreviewForTabAtIndex:self.draggedTabIndex];
+		if(!image)
+			return;
+		NSRect frame = NSMakeRect(0, 0, image.size.width, image.size.height);
+		NSPanel* preview = [[NSPanel alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+		preview.ignoresMouseEvents = YES;
+		preview.excludedFromWindowsMenu = YES;
+		preview.collectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorFullScreenAuxiliary | NSWindowCollectionBehaviorIgnoresCycle;
+		preview.level = NSFloatingWindowLevel;
+		preview.alphaValue = 0.82;
+		preview.hasShadow = YES;
+		preview.opaque = NO;
+		preview.backgroundColor = NSColor.clearColor;
+		NSImageView* imageView = [[NSImageView alloc] initWithFrame:frame];
+		imageView.image = image;
+		imageView.wantsLayer = YES;
+		imageView.layer.cornerRadius = 10;
+		imageView.layer.masksToBounds = YES;
+		preview.contentView = imageView;
+		self.tabDragPreview = preview;
+		[self selectTabWithIdentifier:self.selectionBeforeTabDrag];
+	}
+	[_tabDragPreview setFrameTopLeftPoint:[self topLeftForTabDragAtPoint:screenPoint]];
+	if(!_tabDragPreview.isVisible)
+		[_tabDragPreview orderFront:nil];
+}
+
+- (void)draggingSession:(NSDraggingSession*)session movedToPoint:(NSPoint)screenPoint
+{
+	if([self isTabDragOnRailAtPoint:screenPoint])
+		self.dropTabAtIndex = [self railDropIndexAtPoint:[self pointInBarFromScreen:screenPoint]];
+	else
+		[self updateTabDragPreviewAtPoint:screenPoint];
+}
+
 - (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation
 {
+	NSInteger index = _draggedTabIndex;
+	BOOL cancelled = (NSEvent.pressedMouseButtons & 1) != 0;
+	BOOL onRail = [self isTabDragOnRailAtPoint:screenPoint];
+	NSPoint pointInBar = [self pointInBarFromScreen:screenPoint];
+	NSInteger dropIndex = onRail ? [self railDropIndexAtPoint:pointInBar] : -1;
+	NSUUID* identifier = index >= 0 && index < _tabItems.count ? [[NSUUID alloc] initWithUUIDString:_tabItems[index].identifier] : nil;
+	self.dragging = NO;
 	self.draggedTabIndex = -1;
+	self.dropTabAtIndex = -1;
+	self.tabDragLeftRail = NO;
+	self.tabDragMidpoints = nil;
+	self.tabDragDestination = nil;
+	[_tabDragPreview orderOut:nil];
+	self.tabDragPreview = nil;
+	NSString* previousSelection = self.selectionBeforeTabDrag;
+	self.selectionBeforeTabDrag = nil;
+	if(cancelled)
+		[self selectTabWithIdentifier:previousSelection];
+
+	if(operation != NSDragOperationNone || !identifier || cancelled)
+		return;
+	if(onRail)
+	{
+		if(dropIndex != index && dropIndex != index + 1 && [_delegate respondsToSelector:@selector(performDropOfTabItem:fromTabBar:index:toTabBar:index:operation:)])
+			[_delegate performDropOfTabItem:identifier fromTabBar:self index:index toTabBar:self index:dropIndex operation:NSDragOperationMove];
+	}
+	else if(!NSPointInRect(pointInBar, self.bounds) && [_delegate respondsToSelector:@selector(tabBarView:didTearOffTabAtIndex:atWindowTopLeft:)])
+	{
+		[self selectTabWithIdentifier:previousSelection];
+		[_delegate tabBarView:self didTearOffTabAtIndex:(NSUInteger)index atWindowTopLeft:[self topLeftForTabDragAtPoint:screenPoint]];
+	}
 }
 
 // ========================
@@ -1134,50 +1596,62 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSDragOperation)draggingEntered:(id <NSDraggingInfo>)sender
 {
-	self.dragging = YES;
 	return [self draggingUpdated:sender];
+}
+
+- (NSInteger)dropIndexAtPoint:(NSPoint)point
+{
+	for(OakTabFrame* frame in _currentLayout)
+	{
+		NSUInteger index = [_tabItems indexOfObject:frame.tabItem];
+		NSRect rect = frame.tabItem.tabView.frame;
+		if(index == NSNotFound && _dropTabAtIndex >= 0 && point.x >= NSMinX(rect) && point.x < NSMaxX(rect))
+			return _dropTabAtIndex;
+		if(index != NSNotFound && frame.width > 0 && point.x < NSMidX(rect))
+			return index;
+	}
+	return _tabItems.count;
 }
 
 - (NSDragOperation)draggingUpdated:(id <NSDraggingInfo>)sender
 {
-	NSDragOperation operation = [sender draggingSourceOperationMask];
-	operation = (operation & NSDragOperationMove) ?: (operation & NSDragOperationCopy);
-	if(operation == NSDragOperationNone)
-		return operation;
-
-	NSPoint pos = [self convertPoint:sender.draggingLocation fromView:nil];
-
-	NSInteger i = 0;
-	CGFloat x = 0;
-	for(OakTabItem* tabItem in _tabItems)
-	{
-		if(tabItem.tabView && !tabItem.tabView.hidden)
-		{
-			CGFloat width = NSWidth(tabItem.tabView.frame);
-
-			if(_dropTabAtIndex == -1 && pos.x < x + width-20)
-				break;
-			else if(_dropTabAtIndex != -1 && pos.x < x + width/2)
-				break;
-
-			x += width;
-		}
-		++i;
-	}
-
-	self.animator.dropTabAtIndex = i;
-
+	OakTabBarView* source = [sender.draggingSource isKindOfClass:OakTabBarView.class] ? sender.draggingSource : nil;
+	NSDragOperation mask = sender.draggingSourceOperationMask;
+	NSDragOperation operation = (mask & NSDragOperationMove) ?: (mask & NSDragOperationCopy);
+	if(!operation || !source || !_delegate || [_delegate class] != [source.delegate class])
+		return NSDragOperationNone;
+	if(source != self && [source isTabDragOnRailAtPoint:NSEvent.mouseLocation])
+		return NSDragOperationNone;
+	source.tabDragDestination = self;
+	[source.tabDragPreview orderOut:nil];
+	self.dragging = YES;
+	NSPoint point = [self pointInBarFromScreen:NSEvent.mouseLocation];
+	self.dropTabAtIndex = source == self && [self isTabDragOnRailAtPoint:NSEvent.mouseLocation] ? [self railDropIndexAtPoint:point] : [self dropIndexAtPoint:point];
 	return operation;
 }
 
 - (void)draggingExited:(id <NSDraggingInfo>)sender
 {
+	OakTabBarView* source = [sender.draggingSource isKindOfClass:OakTabBarView.class] ? sender.draggingSource : nil;
+	if(source.tabDragDestination == self)
+		source.tabDragDestination = nil;
 	self.dragging = NO;
-	self.animator.dropTabAtIndex = -1;
+	if(source != self || ![self isTabDragOnRailAtPoint:NSEvent.mouseLocation])
+		self.animator.dropTabAtIndex = -1;
 }
 
 - (BOOL)prepareForDragOperation:(id <NSDraggingInfo>)sender
 {
+	// The last destination update can precede mouse-up. Validate the actual
+	// release location before accepting a drop, especially after leaving the bar.
+	NSPoint screenPoint = NSEvent.mouseLocation;
+	OakTabBarView* source = sender.draggingSource;
+	if(!NSPointInRect([self pointInBarFromScreen:screenPoint], self.bounds) || (source != self && [source isTabDragOnRailAtPoint:screenPoint]))
+	{
+		self.dragging = NO;
+		self.dropTabAtIndex = -1;
+		return NO;
+	}
 	sender.animatesToDestination = YES;
 	return YES;
 }
@@ -1187,21 +1661,30 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	OakTabBarView* sourceTabBar = sender.draggingSource;
 	NSDragOperation mask = sender.draggingSourceOperationMask;
 	NSInteger fromIndex = sourceTabBar.draggedTabIndex;
-	NSInteger toIndex   = _dropTabAtIndex;
+	NSPoint screenPoint = NSEvent.mouseLocation;
+	NSPoint point = [self pointInBarFromScreen:screenPoint];
+	NSInteger toIndex = sourceTabBar == self && [self isTabDragOnRailAtPoint:screenPoint] ? [self railDropIndexAtPoint:point] : [self dropIndexAtPoint:point];
 
 	__block OakTabItem* tabItem = nil;
 	[sender enumerateDraggingItemsWithOptions:0 forView:self classes:@[ [NSPasteboardItem class] ] searchOptions:@{ } usingBlock:^(NSDraggingItem* draggingItem, NSInteger idx, BOOL* stop){
-		CGFloat x0 = _dropTabAtIndex > 0 ? NSMaxX(_tabItems[_dropTabAtIndex-1].tabView.frame) : NSMinX(self.bounds);
-		CGFloat x1 = NSMinX((_dropTabAtIndex < _tabItems.count ? _tabItems[_dropTabAtIndex].tabView : self.backgroundView).frame);
-		draggingItem.draggingFrame = NSMakeRect(x0, NSMinY(self.bounds), x1 - x0, NSHeight(self.bounds));
+		for(OakTabFrame* frame in _currentLayout)
+		{
+			if(![_tabItems containsObject:frame.tabItem] && frame.tabItem.tabView)
+			{
+				draggingItem.draggingFrame = frame.tabItem.tabView.frame;
+				break;
+			}
+		}
 		tabItem = [OakTabItem tabItemFromPasteboardItem:draggingItem.item];
 	}];
 
 	self.draggedTabIndex = -1;
 	self.dropTabAtIndex  = -1;
 
-	if(sourceTabBar == self && fromIndex == toIndex)
-		return NO;
+	if(sourceTabBar == self && (fromIndex == toIndex || fromIndex + 1 == toIndex))
+		return YES;
+	if(sourceTabBar != self)
+		[sourceTabBar selectTabWithIdentifier:sourceTabBar.selectionBeforeTabDrag];
 
 	BOOL shouldDelegate = [_delegate respondsToSelector:@selector(performDropOfTabItem:fromTabBar:index:toTabBar:index:operation:)];
 	return shouldDelegate && [_delegate performDropOfTabItem:[[NSUUID alloc] initWithUUIDString:tabItem.identifier] fromTabBar:sourceTabBar index:fromIndex toTabBar:self index:toIndex operation:(mask & NSDragOperationMove) ?: (mask & NSDragOperationCopy)];
@@ -1284,9 +1767,32 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	return result;
 }
 
+- (void)setLeadingContentInset:(CGFloat)leadingContentInset
+{
+	if(_leadingContentInset == leadingContentInset)
+		return;
+	_leadingContentInset = leadingContentInset;
+	[self updateToLayout:[self makeLayout]];
+}
+
 - (NSArray<OakTabFrame*>*)makeLayoutForTabItems:(NSArray<OakTabItem*>*)tabItems inRectOfWidth:(CGFloat)totalWidth
 {
-	totalWidth += 1; // We place leftmost tab at position -1
+	if(self.isWindowTitleBar)
+	{
+		// Keep short filenames compact. Extra space remains a window drag area.
+		CGFloat desiredWidth = 0;
+		NSMutableArray<OakTabFrame*>* compactLayout = [NSMutableArray arrayWithCapacity:tabItems.count];
+		for(OakTabItem* item in tabItems)
+		{
+			CGFloat width = MIN(_maximumTabSize, MAX(_minimumTabSize, item.fittingWidth));
+			desiredWidth += width;
+			[compactLayout addObject:[[OakTabFrame alloc] initWithTabItem:item width:width]];
+		}
+		if(desiredWidth <= totalWidth)
+			return compactLayout;
+	}
+	if(self.leadingContentInset <= 0)
+		totalWidth += 1; // The leftmost tab starts at -1 when there is no inset.
 
 	NSMutableArray<OakTabFrame*>* array = [NSMutableArray array];
 	if(_maximumTabSize * tabItems.count <= totalWidth)
@@ -1353,9 +1859,13 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSArray<OakTabFrame*>*)makeLayout
 {
+	if(_collapsedTitle && !_dragging)
+		return @[];
+
 	static NSString* const firstTabIdentifier = [NSUUID UUID].UUIDString;
-	// Reserve the trailing status label's width so the last tab cannot slide under it.
-	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame);
+	// Reserve leading traffic-light inset (Minimal) and trailing chrome so tabs
+	// cannot slide under the "+" button or status label.
+	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame) - MAX(0, self.leadingContentInset);
 	if(!_statusTextLabel.hidden)
 		visibleWidth -= NSWidth(_statusTextLabel.frame) + 16;
 	NSUInteger const countOfVisibleTabs = MIN(MAX(0, floor(visibleWidth / _minimumTabSize)), _tabItems.count);
@@ -1417,7 +1927,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 		if(tabItem.needsLayout)
 		{
-			tabItem.fittingWidth = tabItem.tabView.fittingSize.width;
+			tabItem.fittingWidth = self.isWindowTitleBar ? [tabItem.tabView preferredTitleBarWidth] : tabItem.tabView.fittingSize.width;
 			tabItem.needsLayout = NO;
 		}
 	}
@@ -1492,20 +2002,40 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	}
 
 	NSRect createNewTabButtonFrame = _createNewTabButton.frame;
-	CGFloat x = -1, y = NSMinY(self.bounds)+1, height = NSHeight(self.bounds)-1;
+	CGFloat y = NSMinY(self.bounds)+1, height = MAX(0, NSHeight(self.bounds)-1);
+	CGFloat leading = MAX(0, self.leadingContentInset);
 
+	CGFloat x = (leading > 0) ? leading : -1;
 	for(OakTabFrame* tabFrame in _currentLayout)
 	{
-		tabFrame.tabItem.tabView.tabItem = tabFrame.tabItem;
-		tabFrame.tabItem.tabView.frame = NSMakeRect(x, y, tabFrame.width, height);
+		OakTabView* tabView = tabFrame.tabItem.tabView;
+		tabView.tabItem = tabFrame.tabItem;
+		tabView.frame = NSMakeRect(x, y, tabFrame.width, height);
 		x += tabFrame.width;
 	}
 
-	_backgroundView.frame = NSMakeRect(x, y, NSWidth(self.bounds)+2 - x, height);
-	_createNewTabButton.frame  = { { x, round((height - NSHeight(createNewTabButtonFrame)) / 2) }, createNewTabButtonFrame.size };
-
+	_createNewTabButton.frame = { { x, round((height - NSHeight(createNewTabButtonFrame)) / 2) }, createNewTabButtonFrame.size };
 	if(!_statusTextLabel.hidden)
 		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - NSWidth(_statusTextLabel.frame), round((NSHeight(self.bounds) - NSHeight(_statusTextLabel.frame)) / 2), NSWidth(_statusTextLabel.frame), NSHeight(_statusTextLabel.frame));
+	BOOL collapsed = _collapsedTitle && !_dragging;
+	_createNewTabButton.hidden = collapsed;
+	_collapsedTitleLabel.hidden = !collapsed;
+	if(collapsed)
+	{
+		CGFloat margin = MAX(leading, _statusTextLabel.hidden ? 0 : NSWidth(_statusTextLabel.frame) + 16);
+		_collapsedTitleLabel.frame = NSMakeRect(margin, floor((NSHeight(self.bounds) - 17) / 2), MAX(0, NSWidth(self.bounds) - 2 * margin), 17);
+	}
+
+	NSView* above = nil;
+	for(OakTabFrame* tabFrame in _currentLayout)
+	{
+		[self addSubview:tabFrame.tabItem.tabView positioned:NSWindowAbove relativeTo:above];
+		above = tabFrame.tabItem.tabView;
+	}
+	[self addSubview:_createNewTabButton positioned:NSWindowAbove relativeTo:above];
+	[self addSubview:_statusTextLabel positioned:NSWindowAbove relativeTo:_createNewTabButton];
+	if(self.isWindowTitleBar)
+		self.needsDisplay = YES;
 }
 
 - (void)setFrameSize:(NSSize)newSize

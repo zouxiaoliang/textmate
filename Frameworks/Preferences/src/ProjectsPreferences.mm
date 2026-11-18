@@ -26,6 +26,7 @@
 			@"foldersOnTop":                 kUserDefaultsFoldersOnTopKey,
 			@"showFileExtensions":           kUserDefaultsShowFileExtensionsKey,
 			@"disableTabBarCollapsing":      kUserDefaultsDisableTabBarCollapsingKey,
+			@"hideTabsInFullScreen":         kUserDefaultsHideTabsInFullScreenKey,
 			@"disableAutoResize":            kUserDefaultsDisableFileBrowserWindowResizeKey,
 			@"autoRevealFile":               kUserDefaultsAutoRevealFileKey,
 			@"fileBrowserPlacement":         kUserDefaultsFileBrowserPlacementKey,
@@ -130,6 +131,7 @@
 	NSButton* adjustWindowWhenTogglingDisplayCheckBox  = OakCreateCheckBox(@"Adjust window when toggling display");
 
 	NSButton* showForSingleDocumentCheckBox            = OakCreateCheckBox(@"Show for single document");
+	NSButton* showTabsInFullScreenCheckBox             = OakCreateCheckBox(@"Show in full screen");
 	NSButton* reOrderWhenOpeningAFileCheckBox          = OakCreateCheckBox(@"Re-order when opening a file");
 	NSButton* automaticallyCloseUnusedTabsCheckBox     = OakCreateCheckBox(@"Automatically close unused tabs");
 
@@ -163,6 +165,7 @@
 		@[ NSGridCell.emptyContentView,                adjustWindowWhenTogglingDisplayCheckBox  ],
 		@[ ],
 		@[ OakCreateLabel(@"Document tabs:"),          showForSingleDocumentCheckBox            ],
+		@[ NSGridCell.emptyContentView,                showTabsInFullScreenCheckBox            ],
 		@[ NSGridCell.emptyContentView,                reOrderWhenOpeningAFileCheckBox          ],
 		@[ NSGridCell.emptyContentView,                automaticallyCloseUnusedTabsCheckBox     ],
 		@[ ],
@@ -192,6 +195,7 @@
 	[fileBrowserPositionPopUp                 bind:NSSelectedTagBinding toObject:self withKeyPath:@"fileBrowserPlacement"         options:@{ NSValueTransformerNameBindingOption: @"OakFileBrowserPlacementSettingsTransformer" }];
 	[adjustWindowWhenTogglingDisplayCheckBox  bind:NSValueBinding       toObject:self withKeyPath:@"disableAutoResize"            options:@{ NSValueTransformerNameBindingOption: NSNegateBooleanTransformerName }];
 	[showForSingleDocumentCheckBox            bind:NSValueBinding       toObject:self withKeyPath:@"disableTabBarCollapsing"      options:nil];
+	[showTabsInFullScreenCheckBox             bind:NSValueBinding       toObject:self withKeyPath:@"hideTabsInFullScreen"         options:@{ NSValueTransformerNameBindingOption: NSNegateBooleanTransformerName }];
 	[reOrderWhenOpeningAFileCheckBox          bind:NSValueBinding       toObject:self withKeyPath:@"disableTabReordering"         options:@{ NSValueTransformerNameBindingOption: NSNegateBooleanTransformerName }];
 	[automaticallyCloseUnusedTabsCheckBox     bind:NSValueBinding       toObject:self withKeyPath:@"disableTabAutoClose"          options:@{ NSValueTransformerNameBindingOption: NSNegateBooleanTransformerName }];
 	[excludeFilesTextField                    bind:NSValueBinding       toObject:self withKeyPath:@"excludePattern"               options:nil];

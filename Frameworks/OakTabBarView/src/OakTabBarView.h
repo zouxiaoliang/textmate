@@ -15,15 +15,19 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 - (void)performClose:(id)sender;
 
 @property (nonatomic) BOOL neverHideLeftBorder;
+@property (nonatomic, getter=isWindowTitleBar) BOOL windowTitleBar;
+@property (nonatomic, copy) NSString* collapsedTitle;
+@property (nonatomic) NSColor* titleBarBackgroundColor;
+
+// iTerm2 Minimal: reserve leading space for floating traffic lights so
+// tabs begin to their right; the inset strip stays part of the bar and
+// participates in window dragging.
+@property (nonatomic) CGFloat leadingContentInset;
 
 // A short status message shown in the bar's trailing edge, e.g. the terminal's
 // unseen state; nil (or empty) hides it again.
 - (void)setStatusText:(NSString*)text color:(NSColor*)color;
 
-// Performs the system title bar double-click action (AppleActionOnDoubleClick,
-// Zoom by default) — the whole bar doubles as the title bar in the chromeless
-// layout, so both the blank area and tabs trigger this.
-- (void)performTitlebarDoubleClick:(id)sender;
 @end
 
 @protocol OakTabBarViewDelegate <NSObject>
@@ -38,6 +42,12 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 
 - (void)performCloseTab:(OakTabBarView*)sender;
 - (void)performCloseOtherTabsXYZ:(OakTabBarView*)sender;
+
+// Sent when the bar's "+" (create new tab) button is clicked.
+- (void)newTabInTabBar:(OakTabBarView*)sender;
+
+- (NSImage*)tabBarView:(OakTabBarView*)sender tearOffPreviewForTabAtIndex:(NSUInteger)anIndex;
+- (void)tabBarView:(OakTabBarView*)sender didTearOffTabAtIndex:(NSUInteger)anIndex atWindowTopLeft:(NSPoint)topLeft;
 @end
 
 @protocol OakTabBarViewDataSource <NSObject>

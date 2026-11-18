@@ -32,6 +32,7 @@ extern NSString* const kUserDefaultsAllowExpandingPackagesKey;
 extern NSString* const kUserDefaultsDisableTabReorderingKey;
 extern NSString* const kUserDefaultsDisableTabAutoCloseKey;
 extern NSString* const kUserDefaultsDisableTabBarCollapsingKey;
+extern NSString* const kUserDefaultsHideTabsInFullScreenKey;
 
 // ===========
 // = Bundles =

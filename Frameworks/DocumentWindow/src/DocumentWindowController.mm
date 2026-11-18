@@ -69,6 +69,8 @@ static bool can_reach_host (char const* host)
 	return res;
 }
 
+static CGFloat const kWindowButtonsInset = 78;
+
 static void show_command_error (std::string const& message, oak::uuid_t const& uuid, NSWindow* window = nil, std::string commandName = NULL_STR)
 {
 	bundles::item_ptr bundleItem = bundles::lookup(uuid);
@@ -115,6 +117,8 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 @property (nonatomic) EditorContextChanges* editorChanges;
 @property (nonatomic) EditorLanguageIntelligence* languageIntelligence;
 @property (nonatomic) OakTabBarView*              tabBarView;
+@property (nonatomic) NSLayoutConstraint*        hiddenTabBarHeight;
+@property (nonatomic) NSMutableDictionary<NSUUID*, NSString*>* tabTitles;
 @property (nonatomic) OakDocumentView*            documentView;
 @property (nonatomic) OakTextView*                textView;
 @property (nonatomic) FileBrowserViewController*  fileBrowser;
@@ -198,8 +202,6 @@ namespace
 static NSArray* const kObservedKeyPaths = @[ @"textView.selectionString", @"textView.font", @"textView.fontScaleFactor", @"textView.themeUUID", @"selectedDocument.fileType", @"selectedDocument", @"arrayController.arrangedObjects.path", @"arrayController.arrangedObjects.displayName", @"arrayController.arrangedObjects.documentEdited", @"selectedDocument.path", @"selectedDocument.displayName", @"selectedDocument.icon", @"selectedDocument.onDisk" , @"selectedDocument.documentEdited" ];
 
 @implementation DocumentWindowController
-
-static CGFloat const kTabBarLeadingInset = 80; // Room for the traffic lights; the bare strip left of the tab bar stays native title bar.
 
 static NSDictionary* ContextDocument(OakDocument* document)
 {
@@ -481,6 +483,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.tabBarView = [[OakTabBarView alloc] initWithFrame:NSZeroRect];
 		self.tabBarView.dataSource = self;
 		self.tabBarView.delegate   = self;
+		self.tabBarView.windowTitleBar = YES;
 
 		self.documentView = [[OakDocumentView alloc] init];
 		self.textView = self.documentView.textView;
@@ -495,13 +498,15 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
 		self.window.delegate           = self;
 		self.window.releasedWhenClosed = NO;
-		// Chromeless layout (Claude-desktop style): the standard title bar chrome
-		// is hidden, the traffic lights float over the content, and the tab bar
-		// is embedded at the top of the content view, leading-aligned next to
-		// the traffic lights. The strip left of the tab bar stays title bar, so
-		// dragging and double-click zooming keep working natively.
+		// iTerm2 Minimal: no title-bar accessory. The tab bar lives at the top of
+		// the content view (full width), traffic lights float over its leading
+		// inset, and blank areas of the bar drag the window.
 		self.window.titlebarAppearsTransparent = YES;
 		self.window.titleVisibility            = NSWindowTitleHidden;
+		self.window.titlebarSeparatorStyle     = NSTitlebarSeparatorStyleNone;
+		self.window.movableByWindowBackground  = NO;
+		self.tabBarView.leadingContentInset   = kWindowButtonsInset;
+		self.tabBarView.frameSize = self.tabBarView.intrinsicContentSize;
 
 		self.terminalPanelController = [[TerminalPanelViewController alloc] initWithContentView:self.layoutView];
 		__weak DocumentWindowController* terminalOwner = self;
@@ -548,18 +553,15 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			[destination.terminalPanelController focusTerminal];
 		};
 
-		// Chromeless layout: the tab bar sits at the very top of the content
-		// view; the strip left of it (under the traffic lights) is left bare so
-		// the system title bar still handles window dragging and double-click.
 		NSView* contentView = self.window.contentView;
 		OakAddAutoLayoutViewsToSuperview(@[ self.tabBarView, self.terminalPanelController.view ], contentView);
+		self.hiddenTabBarHeight = [self.tabBarView.heightAnchor constraintEqualToConstant:0];
 		self.window.initialFirstResponder = self.textView;
 
-		NSLayoutConstraint* tabLeading = [self.tabBarView.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:kTabBarLeadingInset];
 		[NSLayoutConstraint activateConstraints:@[
 			[self.tabBarView.topAnchor constraintEqualToAnchor:contentView.topAnchor],
+			[self.tabBarView.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
 			[contentView.trailingAnchor constraintEqualToAnchor:self.tabBarView.trailingAnchor],
-			tabLeading,
 			[self.terminalPanelController.view.topAnchor constraintEqualToAnchor:self.tabBarView.bottomAnchor],
 			[self.terminalPanelController.view.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
 			[contentView.trailingAnchor constraintEqualToAnchor:self.terminalPanelController.view.trailingAnchor],
@@ -666,6 +668,18 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 // =========================
 
+- (void)windowDidEnterFullScreen:(NSNotification*)notification
+{
+	self.tabBarView.leadingContentInset = 0;
+	[self updateTabBarVisibility];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification*)notification
+{
+	self.tabBarView.leadingContentInset = kWindowButtonsInset;
+	[self updateTabBarVisibility];
+}
+
 - (void)windowWillClose:(NSNotification*)aNotification
 {
 	[self.editReviewController close];
@@ -736,6 +750,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.disableFileBrowserWindowResize = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableFileBrowserWindowResizeKey];
 	self.autoRevealFile = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsAutoRevealFileKey];
 	self.documentView.hideStatusBar = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsHideStatusBarKey];
+	[self updateTabBarVisibility];
 
 	if(self.layoutView.fileBrowserOnRight != [[NSUserDefaults.standardUserDefaults stringForKey:kUserDefaultsFileBrowserPlacementKey] isEqualToString:@"right"])
 	{
@@ -1747,6 +1762,18 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	{
 		self.window.title = @"«no documents»";
 	}
+	[self updateTabBarVisibility];
+}
+
+- (void)updateTabBarVisibility
+{
+	NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+	BOOL fullScreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+	BOOL oneDocument = self.documents.count == 1 && ![defaults boolForKey:kUserDefaultsDisableTabBarCollapsingKey];
+	BOOL hidden = fullScreen && (oneDocument || [defaults boolForKey:kUserDefaultsHideTabsInFullScreenKey]);
+	self.tabBarView.hidden = hidden;
+	self.hiddenTabBarHeight.active = hidden;
+	self.tabBarView.collapsedTitle = !fullScreen && oneDocument ? self.window.title : nil;
 }
 
 // The terminal's unseen state used to go into the window subtitle only; the chromeless
@@ -1996,6 +2023,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[document close];
 
 	_documents = newDocuments;
+	[self updateTabBarVisibility];
+	if(_tabTitles.count)
+	{
+		NSMutableSet<NSUUID*>* closed = [NSMutableSet setWithArray:_tabTitles.allKeys];
+		[closed minusSet:[NSSet setWithArray:[_documents valueForKey:@"identifier"]]];
+		[_tabTitles removeObjectsForKeys:closed.allObjects];
+	}
 	if(_documents.count)
 	{
 		[self.tabBarView reloadData];
@@ -2071,10 +2105,31 @@ static NSDictionary* ContextDocument(OakDocument* document)
 // ===========================
 
 - (NSUInteger)numberOfRowsInTabBarView:(OakTabBarView*)aTabBarView                         { return _documents.count; }
-- (NSString*)tabBarView:(OakTabBarView*)aTabBarView titleForIndex:(NSUInteger)anIndex      { return [self titleForDocument:_documents[anIndex] withSetting:kSettingsTabTitleKey]; }
+- (NSString*)tabTitleForDocument:(OakDocument*)document
+{
+	return _tabTitles[document.identifier] ?: [self titleForDocument:document withSetting:kSettingsTabTitleKey];
+}
+
+- (void)setTabTitle:(NSString*)title forDocument:(OakDocument*)document
+{
+	if(title && !_tabTitles)
+		_tabTitles = [NSMutableDictionary dictionary];
+	_tabTitles[document.identifier] = title;
+}
+
+- (NSString*)tabBarView:(OakTabBarView*)aTabBarView titleForIndex:(NSUInteger)anIndex
+{
+	return [self tabTitleForDocument:_documents[anIndex]];
+}
 - (NSString*)tabBarView:(OakTabBarView*)aTabBarView pathForIndex:(NSUInteger)anIndex       { return _documents[anIndex].path ?: @""; }
 - (NSUUID*)tabBarView:(OakTabBarView*)aTabBarView UUIDForIndex:(NSUInteger)anIndex         { return _documents[anIndex].identifier; }
 - (BOOL)tabBarView:(OakTabBarView*)aTabBarView isEditedAtIndex:(NSUInteger)anIndex         { return _documents[anIndex].isDocumentEdited; }
+- (NSString*)tabBarView:(OakTabBarView*)aTabBarView toolTipForIndex:(NSUInteger)anIndex
+{
+	OakDocument* document = _documents[anIndex];
+	NSString* label = document.path ? document.path.stringByAbbreviatingWithTildeInPath : [self tabTitleForDocument:document];
+	return anIndex < 9 ? [NSString stringWithFormat:@"%@  (⌘%lu)", label, anIndex + 1] : label;
+}
 
 // ==============================
 // = OakTabBarView Context Menu =
@@ -2114,6 +2169,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		if(documents.count == 1)
 		{
 			DocumentWindowController* controller = [DocumentWindowController new];
+			[controller setTabTitle:_tabTitles[documents.firstObject.identifier] forDocument:documents.firstObject];
 			controller.documents = documents;
 			if(path::is_child(to_s(documents.firstObject.path), to_s(self.projectPath)))
 				controller.defaultProjectPath = self.projectPath;
@@ -2198,14 +2254,104 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)tabBarView:(OakTabBarView*)aTabBarView didDoubleClickIndex:(NSUInteger)anIndex
 {
-	// Double-clicking a tab no longer tears it off into a new window; the whole
-	// bar acts as the title bar, so it performs the system double-click action.
-	[aTabBarView performTitlebarDoubleClick:self];
+	if(anIndex >= _documents.count)
+		return;
+	OakDocument* document = _documents[anIndex];
+	NSAlert* alert = [[NSAlert alloc] init];
+	alert.messageText = @"Edit Tab Title";
+	[alert addButtonWithTitle:@"Save"];
+	[alert addButtonWithTitle:@"Cancel"];
+	NSTextField* title = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 24)];
+	title.stringValue = [self tabTitleForDocument:document];
+	alert.accessoryView = title;
+	alert.window.initialFirstResponder = title;
+	[alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response){
+		if(response == NSAlertFirstButtonReturn && [self.documents containsObject:document])
+		{
+			NSString* name = [title.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+			[self setTabTitle:name.length ? name : nil forDocument:document];
+			[self.tabBarView reloadData];
+			[[self class] scheduleSessionBackup:self];
+		}
+	}];
 }
 
 - (void)tabBarViewDidDoubleClick:(OakTabBarView*)aTabBarView
 {
 	[self takeNewTabIndexFrom:[NSIndexSet indexSetWithIndex:_documents.count]];
+}
+
+- (void)newTabInTabBar:(OakTabBarView*)aTabBarView
+{
+	NSUInteger index = _selectedTabIndex < _documents.count ? _selectedTabIndex + 1 : _documents.count;
+	[self takeNewTabIndexFrom:[NSIndexSet indexSetWithIndex:index]];
+}
+
+- (NSImage*)tabBarView:(OakTabBarView*)aTabBarView tearOffPreviewForTabAtIndex:(NSUInteger)anIndex
+{
+	if(anIndex >= _documents.count || _documents[anIndex] != self.selectedDocument)
+		return nil;
+	NSRect bounds = self.documentView.bounds;
+	if(NSIsEmptyRect(bounds))
+		return nil;
+	NSBitmapImageRep* snapshot = [self.documentView bitmapImageRepForCachingDisplayInRect:bounds];
+	if(!snapshot)
+		return nil;
+	[self.documentView cacheDisplayInRect:bounds toBitmapImageRep:snapshot];
+	NSSize size = [self windowFrame].size;
+	CGFloat stripHeight = NSHeight(aTabBarView.bounds);
+	NSColor* background = self.window.backgroundColor;
+	return [NSImage imageWithSize:size flipped:NO drawingHandler:^BOOL(NSRect rect){
+		[background setFill];
+		NSRectFill(rect);
+		NSRect documentRect = NSMakeRect(0, 0, NSWidth(rect), MAX(0, NSHeight(rect) - stripHeight));
+		[snapshot drawInRect:documentRect];
+		return YES;
+	}];
+}
+
+- (void)tabBarView:(OakTabBarView*)aTabBarView didTearOffTabAtIndex:(NSUInteger)anIndex atWindowTopLeft:(NSPoint)topLeft
+{
+	if(anIndex >= _documents.count)
+		return;
+
+	OakDocument* document = _documents[anIndex];
+
+	DocumentWindowController* controller = [DocumentWindowController new];
+	[controller setTabTitle:_tabTitles[document.identifier] forDocument:document];
+	if(path::is_child(to_s(document.path), to_s(self.projectPath)))
+		controller.defaultProjectPath = self.projectPath;
+	controller.documents = @[ document ];
+
+	NSRect frame = self.window.styleMask & NSWindowStyleMaskFullScreen ? controller.window.frame : [self windowFrame];
+	frame.origin = NSMakePoint(topLeft.x, topLeft.y - NSHeight(frame));
+	NSPoint pointer = NSEvent.mouseLocation;
+	for(NSScreen* screen in NSScreen.screens)
+	{
+		if(NSPointInRect(pointer, screen.frame))
+		{
+			NSRect visible = screen.visibleFrame;
+			frame.origin.x = MAX(NSMinX(visible), MIN(NSMaxX(visible) - NSWidth(frame), frame.origin.x));
+			frame.origin.y = MIN(NSMaxY(visible) - NSHeight(frame), MAX(NSMinY(visible), frame.origin.y));
+			break;
+		}
+	}
+	[controller.window setFrame:frame display:NO];
+
+	[controller openAndSelectDocument:document activate:YES];
+	[controller showWindow:self];
+
+	if(_documents.count == 1 && !self.keepsWindowWithoutDocuments)
+	{
+		// Tearing off the window's only tab: the document now lives in the new
+		// window, so close this one instead of leaving it behind with a blank
+		// untitled document.
+		[self close];
+	}
+	else
+	{
+		[self closeTabsAtIndexes:[NSIndexSet indexSetWithIndex:anIndex] askToSaveChanges:NO createDocumentIfEmpty:YES activate:NO];
+	}
 }
 
 // ================
@@ -2218,29 +2364,22 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(!srcDocument)
 		return NO;
 
-	[self insertDocuments:@[ srcDocument ] atIndex:droppedIndex selecting:self.selectedDocument andClosing:@[ srcDocument.identifier ]];
+	BOOL sameWindow = sourceTabBar == destTabBar;
+	DocumentWindowController* sourceController = (DocumentWindowController*)sourceTabBar.delegate;
+	NSUInteger sourceIndex = [sourceController.documents indexOfObject:srcDocument];
+	if(!sourceController || sourceIndex == NSNotFound)
+		return NO;
+	if(!sameWindow && sourceController.tabTitles[tabItemUUID])
+		[self setTabTitle:sourceController.tabTitles[tabItemUUID] forDocument:srcDocument];
+	[self insertDocuments:@[ srcDocument ] atIndex:droppedIndex selecting:srcDocument andClosing:@[ srcDocument.identifier ]];
+	[self openAndSelectDocument:srcDocument activate:YES];
 
-	if(operation == NSDragOperationMove && sourceTabBar != destTabBar)
+	if(operation == NSDragOperationMove && !sameWindow)
 	{
-		for(DocumentWindowController* delegate in SortedControllers())
-		{
-			if(delegate == sourceTabBar.delegate)
-			{
-				BOOL wasSelected = dragIndex == sourceTabBar.selectedTabIndex;
-
-				if(delegate.keepsWindowWithoutDocuments || delegate.documents.count > 1)
-						[delegate closeTabsAtIndexes:[NSIndexSet indexSetWithIndex:dragIndex] askToSaveChanges:NO createDocumentIfEmpty:YES activate:YES];
-				else	[delegate close];
-
-				if(wasSelected)
-				{
-					self.selectedTabIndex = [self.documents indexOfObject:srcDocument];
-					[self openAndSelectDocument:srcDocument activate:YES];
-				}
-
-				return YES;
-			}
-		}
+		if(sourceController.keepsWindowWithoutDocuments || sourceController.documents.count > 1)
+			[sourceController closeTabsAtIndexes:[NSIndexSet indexSetWithIndex:sourceIndex] askToSaveChanges:NO createDocumentIfEmpty:YES activate:NO];
+		else
+			[sourceController close];
 	}
 
 	return YES;
@@ -2359,7 +2498,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(!self.selectedDocument.fileType)
 		return;
 	if(theme_ptr theme = self.textView.theme)
-		self.window.backgroundColor = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
+	{
+		NSColor* background = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
+		self.window.backgroundColor = background;
+		self.tabBarView.titleBarBackgroundColor = background;
+	}
 }
 
 - (void)updateTerminalTheme
@@ -2794,7 +2937,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	int i = 0;
 	for(OakDocument* document in _documents)
 	{
-		NSMenuItem* item = [aMenu addItemWithTitle:document.displayName action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:i < 8 ? [NSString stringWithFormat:@"%c", '1' + i] : @""];
+		NSMenuItem* item = [aMenu addItemWithTitle:document.displayName action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:i < 9 ? [NSString stringWithFormat:@"%c", '1' + i] : @""];
 		item.tag     = i;
 		item.toolTip = [document.path stringByAbbreviatingWithTildeInPath];
 		if(aMenu.propertiesToUpdate & NSMenuPropertyItemImage)
@@ -2817,7 +2960,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	{
 		[aMenu addItem:[NSMenuItem separatorItem]];
 
-		NSMenuItem* item = [aMenu addItemWithTitle:@"Last Tab" action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:@"9"];
+		NSMenuItem* item = [aMenu addItemWithTitle:@"Last Tab" action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:_documents.count <= 9 ? @"9" : @""];
 		item.tag     = _documents.count-1;
 		item.toolTip = _documents.lastObject.displayName;
 	}
@@ -3148,6 +3291,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 		if(!doc.path) // Add untitled documents to LRU-list
 			[OakDocumentController.sharedInstance didTouchDocument:doc];
+		if(NSString* title = info[@"tabTitle"])
+			[self setTabTitle:title forDocument:doc];
 
 		doc.recentTrackingDisabled = YES;
 		[documents addObject:doc];
@@ -3216,6 +3361,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 			doc[@"fileType"] = document.fileType;
 		if(document.displayName)
 			doc[@"displayName"] = document.displayName;
+		if(NSString* title = _tabTitles[document.identifier])
+			doc[@"tabTitle"] = title;
 		if([document isEqual:self.selectedDocument])
 			doc[@"selected"] = @YES;
 		if([self isDocumentSticky:document])

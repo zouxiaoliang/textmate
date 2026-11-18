@@ -79,6 +79,7 @@ NSString* const kUserDefaultsAutoRevealFileKey                 = @"autoRevealFil
 NSString* const kUserDefaultsDisableTabReorderingKey           = @"disableTabReordering";
 NSString* const kUserDefaultsDisableTabAutoCloseKey            = @"disableTabAutoClose";
 NSString* const kUserDefaultsDisableTabBarCollapsingKey        = @"disableTabBarCollapsing";
+NSString* const kUserDefaultsHideTabsInFullScreenKey           = @"hideTabsInFullScreen";
 NSString* const kUserDefaultsAllowExpandingLinksKey            = @"allowExpandingLinks";
 NSString* const kUserDefaultsAllowExpandingPackagesKey         = @"allowExpandingPackages";
 
