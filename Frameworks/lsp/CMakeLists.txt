@@ -9,6 +9,10 @@ target_include_directories(lsp PRIVATE "${CMAKE_SOURCE_DIR}/vendor")
 # Headless integration test. Not a textmate_add_tests target: the generic runner
 # executes test_* on a background queue, but LSPClient requires the main thread.
 if(BUILD_TESTING)
+  add_executable(lsp_selection tests/lsp_selection.mm)
+  target_link_libraries(lsp_selection PRIVATE lsp ${TEXTMATE_DEBUG_LIBS})
+  add_test(NAME lsp_selection COMMAND lsp_selection)
+
   add_executable(lsp_integration tests/lsp_integration.mm)
   target_link_libraries(lsp_integration PRIVATE lsp ${TEXTMATE_DEBUG_LIBS})
   target_include_directories(lsp_integration PRIVATE "${CMAKE_SOURCE_DIR}/Shared/include")

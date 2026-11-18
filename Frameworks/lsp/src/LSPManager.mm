@@ -1,9 +1,11 @@
 #import "LSPManager.h"
 #import "LSPClient.h"
+#import "LSPServerSelection.h"
 #import <settings/settings.h>
 #import <text/types.h>
 #import <io/path.h>
 #import <ns/ns.h>
+#import <oak/oak.h>
 #import <OakFoundation/NSString Additions.h>
 
 NSString* const LSPDiagnosticsDidChangeNotification = @"LSPDiagnosticsDidChange";
@@ -65,12 +67,117 @@ static NSString* languageIdForScope (NSString* fileType)
 
 // Uses shared LSPLanguageIdForExtension() from LSPClient.mm
 
+static std::string detectWorkspaceRoot (std::string const& filePath);
+
+// Defaults are only used when the project has no lspCommand setting. Check
+// PATH before selecting one so opening a file does not launch a missing server.
+NSString* LSPDefaultCommandForExtension (NSString* extension, NSString* searchPath)
+{
+	static NSDictionary<NSString*, NSArray<NSString*>*>* commands;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		commands = @{
+			@"c": @[@"clangd"], @"h": @[@"clangd"], @"cc": @[@"clangd"],
+			@"cpp": @[@"clangd"], @"cxx": @[@"clangd"], @"hpp": @[@"clangd"],
+			@"hh": @[@"clangd"], @"hxx": @[@"clangd"],
+			@"m": @[@"clangd"], @"mm": @[@"clangd"],
+			@"go": @[@"gopls"], @"rs": @[@"rust-analyzer"],
+			@"py": @[@"pyright-langserver --stdio", @"pylsp"],
+			@"pyw": @[@"pyright-langserver --stdio", @"pylsp"],
+			@"java": @[@"jdtls"],
+			@"js": @[@"typescript-language-server --stdio"],
+			@"jsx": @[@"typescript-language-server --stdio"],
+			@"ts": @[@"typescript-language-server --stdio"],
+			@"tsx": @[@"typescript-language-server --stdio"],
+			@"php": @[@"intelephense --stdio"], @"rb": @[@"ruby-lsp"],
+			@"lua": @[@"lua-language-server"],
+			@"sh": @[@"bash-language-server start"],
+			@"bash": @[@"bash-language-server start"],
+			@"zsh": @[@"bash-language-server start"],
+			@"swift": @[@"sourcekit-lsp", @"xcrun sourcekit-lsp"],
+			@"json": @[@"vscode-json-language-server --stdio"],
+			@"css": @[@"vscode-css-language-server --stdio"],
+			@"html": @[@"vscode-html-language-server --stdio"],
+			@"htm": @[@"vscode-html-language-server --stdio"],
+			@"yaml": @[@"yaml-language-server --stdio"],
+			@"yml": @[@"yaml-language-server --stdio"],
+			@"vue": @[@"vue-language-server --stdio"],
+			@"svelte": @[@"svelteserver --stdio"],
+			@"md": @[@"marksman server"],
+			@"toml": @[@"taplo lsp stdio"],
+			@"tf": @[@"terraform-ls serve"],
+			@"kt": @[@"kotlin-language-server"],
+		};
+	});
+
+	NSFileManager* fm = NSFileManager.defaultManager;
+	NSArray<NSString*>* candidates = commands[extension.lowercaseString];
+	for(NSString* directory in [searchPath componentsSeparatedByString:@":"])
+	{
+		for(NSString* command in candidates)
+		{
+			std::vector<std::string> parts = path::unescape(to_s(command));
+			if(parts.empty())
+				continue;
+			NSString* executable = to_ns(parts.front());
+			NSString* candidate = [executable hasPrefix:@"/"] ? executable : [directory stringByAppendingPathComponent:executable];
+			if([fm isExecutableFileAtPath:candidate])
+				return [to_ns(path::escape(to_s(candidate))) stringByAppendingString:[command substringFromIndex:executable.length]];
+		}
+	}
+	return nil;
+}
+
+std::string LSPExecutableSearchPath (std::string const& root, std::map<std::string, std::string> const& environment)
+{
+	std::string searchPath;
+	auto it = environment.find("PATH");
+	if(it != environment.end())
+		searchPath = it->second;
+	std::vector<std::string> additionalPaths = {
+		path::join(root, "node_modules/.bin"), path::join(root, ".venv/bin"),
+		path::join(root, "venv/bin")
+	};
+	if(auto home = environment.find("HOME"); home != environment.end())
+	{
+		additionalPaths.insert(additionalPaths.end(), {
+			path::join(home->second, "go/bin"),
+			path::join(home->second, ".cargo/bin"),
+			path::join(home->second, ".local/bin"),
+			path::join(home->second, ".rbenv/shims"),
+			path::join(home->second, ".asdf/shims"),
+			path::join(home->second, ".local/share/mise/shims")
+		});
+	}
+	additionalPaths.insert(additionalPaths.end(), { "/opt/homebrew/bin", "/opt/homebrew/opt/llvm/bin", "/usr/local/bin" });
+	for(auto path = additionalPaths.rbegin(); path != additionalPaths.rend(); ++path)
+		searchPath = *path + ":" + searchPath;
+	return searchPath;
+}
+
+std::string LSPCommandForDocument (settings_t const& settings, NSString* filePath)
+{
+	if(!settings.get("lspEnabled", true))
+		return "";
+	// An explicit empty command disables automatic selection for this file.
+	if(settings.has("lspCommand"))
+		return settings.get("lspCommand", "");
+
+	std::string root = settings.get("lspRootPath", "");
+	if(root.empty())
+		root = detectWorkspaceRoot(to_s(filePath));
+	std::string searchPath = LSPExecutableSearchPath(root, oak::basic_environment());
+	NSString* command = LSPDefaultCommandForExtension(filePath.pathExtension, to_ns(searchPath));
+	return command ? to_s(command) : "";
+}
+
 static std::vector<std::string> const& workspaceMarkers ()
 {
 	static std::vector<std::string> const markers = {
 		".git", "composer.json", "package.json", "tsconfig.json",
 		"CMakeLists.txt", "compile_commands.json", "go.mod",
-		"Cargo.toml", "pyproject.toml", "setup.py", ".clangd"
+		"go.work", "Cargo.toml", "pyproject.toml", "setup.py", ".clangd",
+		"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "Gemfile"
 	};
 	return markers;
 }
@@ -104,7 +211,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSMutableDictionary<NSUUID*, NSTimer*>*                  _changeTimers;
 	NSMutableDictionary<NSString*, NSArray<NSDictionary*>*>* _diagnosticsByURI;
 	NSMutableDictionary<NSString*, NSString*>*               _diagnosticReportIdentifiers;
-	NSMutableSet<NSString*>* _clearCacheRoots;
+	NSMutableSet<NSString*>* _clearCacheClients;
 }
 @end
 
@@ -130,7 +237,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		_changeTimers       = [NSMutableDictionary new];
 		_diagnosticsByURI   = [NSMutableDictionary new];
 		_diagnosticReportIdentifiers = [NSMutableDictionary new];
-		_clearCacheRoots    = [NSMutableSet new];
+		_clearCacheClients  = [NSMutableSet new];
 
 		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(applicationWillTerminate:) name:NSApplicationWillTerminateNotification object:nil];
 	}
@@ -142,12 +249,12 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	[self shutdownAll];
 }
 
-- (NSString*)rootForClient:(LSPClient*)client
+- (NSString*)keyForClient:(LSPClient*)client
 {
-	for(NSString* root in _clients)
+	for(NSString* key in _clients)
 	{
-		if(_clients[root] == client)
-			return root;
+		if(_clients[key] == client)
+			return key;
 	}
 	return nil;
 }
@@ -163,7 +270,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 	settings_t settings = settings_for_path(filePath, fileType, directory);
 
-	std::string lspCommand = settings.get("lspCommand", "");
+	std::string lspCommand = LSPCommandForDocument(settings, document.path);
 	if(lspCommand.empty())
 		return nil;
 
@@ -177,7 +284,10 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		rootPath = detectWorkspaceRoot(filePath);
 
 	NSString* root = to_ns(rootPath);
-	LSPClient* client = _clients[root];
+	std::string initOpts = settings.get("lspInitOptions", "");
+	NSString* initOptsJSON = initOpts.empty() ? nil : to_ns(initOpts);
+	NSString* key = [@[root, to_ns(lspCommand), initOptsJSON ?: @""] componentsJoinedByString:@"\u001f"];
+	LSPClient* client = _clients[key];
 	if(client)
 		return client;
 
@@ -191,12 +301,9 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	for(size_t i = 1; i < parts.size(); ++i)
 		[args addObject:to_ns(parts[i])];
 
-	std::string initOpts = settings.get("lspInitOptions", "");
-	NSString* initOptsJSON = initOpts.empty() ? nil : to_ns(initOpts);
-
-	if([_clearCacheRoots containsObject:root])
+	if([_clearCacheClients containsObject:key])
 	{
-		[_clearCacheRoots removeObject:root];
+		[_clearCacheClients removeObject:key];
 		// Merge clearCache:true into initializationOptions for servers like Intelephense
 		if(initOptsJSON.length)
 		{
@@ -216,7 +323,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 	client = [[LSPClient alloc] initWithCommand:executable arguments:args workingDirectory:root initOptions:initOptsJSON];
 	client.delegate = self;
-	_clients[root] = client;
+	_clients[key] = client;
 	[NSNotificationCenter.defaultCenter postNotificationName:LSPServerStatusDidChangeNotification object:self];
 	return client;
 }
@@ -228,8 +335,11 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		return;
 
 	NSString* langId = languageIdForScope(document.fileType);
-	if([langId isEqualToString:@"plaintext"] && document.path)
-		langId = LSPLanguageIdForExtension(document.path.pathExtension);
+	NSString* extension = document.path.pathExtension.lowercaseString;
+	// Grammar scopes such as source.ts and source.js can cover TSX/JSX too;
+	// those files need their own language IDs even when the scope matches.
+	if([langId isEqualToString:@"plaintext"] || [@[ @"jsx", @"tsx", @"vue", @"svelte" ] containsObject:extension])
+		langId = LSPLanguageIdForExtension(extension);
 
 	// Don't connect plaintext files — prevents unscoped lspCommand
 	// from launching a server for every file type
@@ -762,27 +872,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 - (NSString*)serverNameForDocument:(OakDocument*)document
 {
 	LSPClient* client = _documentClients[document.identifier];
-	if(!client)
-		return nil;
-
-	NSString* path = document.path;
-	if(!path)
-		return nil;
-
-	std::string filePath  = to_s(path);
-	std::string fileType  = to_s(document.fileType);
-	std::string directory = to_s(document.directory ?: [path stringByDeletingLastPathComponent]);
-
-	settings_t settings = settings_for_path(filePath, fileType, directory);
-	std::string lspCommand = settings.get("lspCommand", "");
-	if(lspCommand.empty())
-		return nil;
-
-	std::vector<std::string> parts = path::unescape(lspCommand);
-	if(parts.empty())
-		return nil;
-
-	return [[NSString stringWithCxxString:parts[0]] lastPathComponent];
+	return client.serverName;
 }
 
 - (void)restartServerForDocument:(OakDocument*)document
@@ -805,9 +895,9 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	}
 
 	// Remove client from _clients so a new one will be created
-	NSString* rootToRemove = [self rootForClient:client];
-	if(rootToRemove)
-		[_clients removeObjectForKey:rootToRemove];
+	NSString* keyToRemove = [self keyForClient:client];
+	if(keyToRemove)
+		[_clients removeObjectForKey:keyToRemove];
 
 	// Dissociate documents before shutdown
 	for(OakDocument* doc in affectedDocs)
@@ -853,9 +943,9 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSLog(@"[LSP:%@] Re-index: restarting with clearCache", client.serverName);
 
 	// Fallback: restart with clearCache in initializationOptions
-	NSString* rootToFlag = [self rootForClient:client];
-	if(rootToFlag)
-		[_clearCacheRoots addObject:rootToFlag];
+	NSString* keyToFlag = [self keyForClient:client];
+	if(keyToFlag)
+		[_clearCacheClients addObject:keyToFlag];
 
 	[self restartServerForDocument:document];
 }
@@ -904,9 +994,9 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSLog(@"[LSP:%@] Handling server termination, cleaning up client", client.serverName);
 
 	// Find and remove the dead client from _clients
-	NSString* rootToRemove = [self rootForClient:client];
-	if(rootToRemove)
-		[_clients removeObjectForKey:rootToRemove];
+	NSString* keyToRemove = [self keyForClient:client];
+	if(keyToRemove)
+		[_clients removeObjectForKey:keyToRemove];
 
 	// Dissociate all documents that were using this client
 	NSMutableArray<NSUUID*>* docIdsToRemove = [NSMutableArray new];

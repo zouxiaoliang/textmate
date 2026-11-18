@@ -159,7 +159,21 @@ Choose **View → Show Project Changes** to review changed files across the repo
 
 ## LSP Support
 
-TextMate has built-in Language Server Protocol support for diagnostics and completions. Configure it per-project in `.textmate` (the shorter replacement for the legacy `.tm_properties` name — both are supported, `.textmate` wins when a directory has both):
+TextMate has built-in Language Server Protocol support for diagnostics and completions. When you open a supported file, TextMate chooses an installed server from its extension. It looks in the project’s `.venv/bin`, `venv/bin`, and `node_modules/.bin`, then in `~/go/bin`, `~/.cargo/bin`, `~/.local/bin`, Homebrew directories, and TextMate’s `PATH`. This also finds `gopls` installed with `go install` when TextMate is launched from Finder, where the shell’s `PATH` is unavailable. Unrecognized extensions and unavailable servers do not start an LSP.
+
+| Files | Default server |
+|-------|----------------|
+| `.rs` | `rust-analyzer` |
+| `.go` | `gopls` |
+| `.py`, `.pyw` | `pyright-langserver --stdio`, then `pylsp` |
+| `.rb` | `ruby-lsp` |
+| `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`, `.hxx`, `.m`, `.mm` | `clangd` |
+| `.sh`, `.bash`, `.zsh` | `bash-language-server start` |
+| `.java` | `jdtls` |
+
+Other defaults cover JavaScript/TypeScript, PHP, Lua, Swift, JSON, CSS, HTML, YAML, Vue, Svelte, Markdown, TOML, Terraform and Kotlin. Install the corresponding language server first, or specify `lspCommand` below to use another one. For Java, install a `jdtls` launcher executable; a JDK alone does not include it.
+
+Configure or override the server per-project in `.textmate` (the shorter replacement for the legacy `.tm_properties` name — both are supported, `.textmate` wins when a directory has both):
 
 ### PHP (intelephense)
 
@@ -272,7 +286,7 @@ lspCommand = "xcrun sourcekit-lsp"
 
 | Property | Description |
 |----------|-------------|
-| `lspCommand` | Command to launch the language server (required) |
+| `lspCommand` | Command to launch the language server; overrides automatic selection for matching files. Set to an empty string to disable automatic selection. |
 | `lspEnabled` | Set to `false` to disable LSP for matching files (default: `true`) |
 | `lspRootPath` | Override workspace root detection |
 | `lspInitOptions` | JSON object passed as `initializationOptions` to the server |

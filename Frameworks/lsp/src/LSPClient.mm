@@ -1,5 +1,6 @@
 #import "LSPClient.h"
 #import "LSPManager.h"
+#import "LSPServerSelection.h"
 #import "LSPFileWatcher.h"
 #import "LSPFileWatchRegistration.h"
 #import <io/FSEventsManager.h>
@@ -225,9 +226,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 		// Build environment first — we need PATH for executable resolution
 		NSMutableDictionary* env = [NSProcessInfo.processInfo.environment mutableCopy];
 		auto const& tmEnv = oak::basic_environment();
-		auto it = tmEnv.find("PATH");
-		if(it != tmEnv.end())
-			env[@"PATH"] = to_ns(it->second);
+		env[@"PATH"] = to_ns(LSPExecutableSearchPath(to_s(workingDirectory), tmEnv));
 
 		// Resolve bare command names via PATH
 		NSString* resolvedCommand = command;
