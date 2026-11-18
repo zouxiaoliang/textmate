@@ -90,19 +90,14 @@ brew install ninja cmake
 ## Setup
 
 ```sh
-git clone --recursive https://github.com/tectiv3/textmate.git
+git clone https://github.com/tectiv3/textmate.git
 cd textmate
 make run
 ```
 
-If you already cloned without `--recursive`, fetch the submodules separately:
-
-```sh
-git submodule update --init --recursive
-```
-
-Onigmo and kvdb are included directly in this repository. The remaining
-submodules provide the document icons and CxxTest.
+Onigmo, kvdb, the document icons, and CxxTest are included directly in this
+repository. No submodule initialization or external dependency checkout is
+required.
 
 ## Build Commands
 

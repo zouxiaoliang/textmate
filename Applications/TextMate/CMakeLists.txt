@@ -162,7 +162,7 @@ textmate_embed(TextMate tm-pi "MacOS")
 textmate_embed(TextMate tm_query "MacOS")
 textmate_embed(TextMate PrivilegedTool "Resources")
 
-# Embedded plugins (.tmplugin bundles from submodules)
+# Embedded plugins (.tmplugin bundles)
 textmate_embed(TextMate Dialog "PlugIns" DIRECTORY)
 textmate_embed(TextMate Dialog2 "PlugIns" DIRECTORY)
 

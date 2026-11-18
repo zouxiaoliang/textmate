@@ -182,6 +182,6 @@ add_subdirectory(Applications/NewApplication)
 add_subdirectory(Applications/ThemeEditor)
 add_subdirectory(Applications/TextMate)
 
-# === PlugIns (submodules) ===
+# === PlugIns ===
 add_subdirectory(PlugIns/dialog)
 add_subdirectory(PlugIns/dialog-1.x)
