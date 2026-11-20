@@ -66,9 +66,27 @@ static NSButton* OakCreateImageToggleButton (NSImage* image, NSString* accessibi
 @property (nonatomic) BOOL lspVisible;
 @property (nonatomic) BOOL lspErrorFlash;
 @property (nonatomic) NSTimer* lspErrorFlashTimer;
+@property (nonatomic) NSColor* themeBackgroundColor;
 @end
 
 @implementation OTVStatusBar
+- (void)setThemeBackgroundColor:(NSColor*)color dark:(BOOL)dark
+{
+	self.themeBackgroundColor = color;
+	self.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+	[self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+	[super drawRect:dirtyRect];
+	if(self.themeBackgroundColor)
+	{
+		[self.themeBackgroundColor setFill];
+		NSRectFill(dirtyRect);
+	}
+}
+
 - (id)initWithFrame:(NSRect)aRect
 {
 	if(self = [super initWithFrame:aRect])

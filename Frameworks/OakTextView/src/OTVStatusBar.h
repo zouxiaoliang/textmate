@@ -11,6 +11,7 @@
 - (void)setLspStatus:(NSString*)status errors:(NSUInteger)errors warnings:(NSUInteger)warnings info:(NSUInteger)info;
 - (void)flashLspError;
 - (void)setCopilotStatus:(NSInteger)status;
+- (void)setThemeBackgroundColor:(NSColor*)color dark:(BOOL)dark;
 @property (nonatomic) NSString* selectionString;
 @property (nonatomic) NSString* grammarName;
 @property (nonatomic) NSString* symbolName;

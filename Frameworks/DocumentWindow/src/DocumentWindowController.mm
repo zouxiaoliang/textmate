@@ -754,8 +754,10 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(applicationDidBecomeActiveNotification:) name:NSApplicationDidBecomeActiveNotification object:NSApp];
 		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(applicationDidResignActiveNotification:) name:NSApplicationDidResignActiveNotification object:NSApp];
 		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(fileBrowserWillDelete:) name:FileBrowserWillDeleteNotification object:nil];
+		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(editorThemeDidChange:) name:OakTextViewThemeDidChangeNotification object:self.textView];
 
 		[self userDefaultsDidChange:nil];
+		[self updateChromeTheme];
 	}
 	return self;
 }
@@ -775,6 +777,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	// When option-clicking to close all windows then
 	// messages are sent to our window after windowWillClose:
 	__autoreleasing __attribute__ ((unused)) NSWindow* delayRelease = self.window;
+}
+
+- (void)editorThemeDidChange:(NSNotification*)notification
+{
+	[self updateChromeTheme];
 }
 
 // ======================================
@@ -2828,6 +2835,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			self.fileBrowser = [[FileBrowserViewController alloc] init];
 			self.fileBrowser.delegate = self;
 			[self.fileBrowser setupViewWithState:_fileBrowserHistory];
+			[self updateChromeTheme];
 			self.layoutView.fileBrowserActionsView = self.fileBrowser.actionsView;
 			if(!_fileBrowserHistory)
 			{
@@ -3069,17 +3077,22 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)updateChromeTheme
 {
-	// Chromeless layout: the content bleeds under the transparent title bar,
-	// so paint the window background with the document theme's background
-	// color and the tab bar area blends into the editor instead of showing
-	// the system title bar gray.
-	if(!self.selectedDocument.fileType)
-		return;
 	if(theme_ptr theme = self.textView.theme)
 	{
-		NSColor* background = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
-		self.window.backgroundColor = background;
-		self.tabBarView.titleBarBackgroundColor = background;
+		NSColor* sidebarBackground = [NSColor colorWithCGColor:theme->gutter_styles().background];
+		self.layoutView.sidebarThemeBackgroundColor = sidebarBackground;
+		self.layoutView.sidebarThemeIsDark = theme->is_dark();
+		[self.outlineViewController setThemeBackgroundColor:sidebarBackground];
+		self.fileBrowser.outlineView.backgroundColor = sidebarBackground;
+
+		// The content bleeds under the transparent title bar, so use the
+		// document background there while keeping the sidebar slightly distinct.
+		if(self.selectedDocument.fileType)
+		{
+			NSColor* background = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
+			self.window.backgroundColor = background;
+			self.tabBarView.titleBarBackgroundColor = background;
+		}
 	}
 }
 

@@ -168,6 +168,7 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 		_statusBar.target = self;
 
 		OakAddAutoLayoutViewsToSuperview(@[ _statusBar ], self);
+		[self updateStyle];
 	}
 	[self setNeedsUpdateConstraints:YES];
 }
@@ -370,6 +371,7 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 
 		[self updateGutterViewFont:self]; // trigger update of gutter view’s line number font
 		auto const& styles = theme->gutter_styles();
+		[_statusBar setThemeBackgroundColor:[NSColor colorWithCGColor:styles.background] dark:theme->is_dark()];
 
 		gutterView.foregroundColor           = [NSColor colorWithCGColor:styles.foreground];
 		gutterView.backgroundColor           = [NSColor colorWithCGColor:styles.background];

@@ -6,6 +6,8 @@
 @property (nonatomic) NSView* fileBrowserView;
 @property (nonatomic) NSView* fileBrowserActionsView;
 @property (nonatomic) NSView* htmlOutputView;
+@property (nonatomic) NSColor* sidebarThemeBackgroundColor;
+@property (nonatomic) BOOL sidebarThemeIsDark;
 
 @property (nonatomic) BOOL fileBrowserCollapsed;
 @property (nonatomic) BOOL outlineCollapsed;

@@ -10,4 +10,5 @@
 @property (nonatomic) SEL action;                                  // sent on selection change; query -selectedSelectionString
 
 - (NSString*)selectedSelectionString;                             // nil when nothing (visible) is selected
+- (void)setThemeBackgroundColor:(NSColor*)color;
 @end

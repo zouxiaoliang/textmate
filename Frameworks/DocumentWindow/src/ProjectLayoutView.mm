@@ -17,12 +17,19 @@ static CGFloat const kSidebarTitleSpacing = 3;
 static CGFloat const kSidebarCollapseThreshold = 100;
 
 @interface ProjectSidebarBackgroundView : NSView
+@property (nonatomic) NSColor* themeBackgroundColor;
 @end
 
 @implementation ProjectSidebarBackgroundView
+- (void)setThemeBackgroundColor:(NSColor*)color
+{
+	_themeBackgroundColor = color;
+	[self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
-	[NSColor.controlBackgroundColor setFill];
+	[(self.themeBackgroundColor ?: NSColor.controlBackgroundColor) setFill];
 	// A window repaint can pass a rectangle larger than this view on macOS 14 and later.
 	NSRectFill(NSIntersectionRect(dirtyRect, self.bounds));
 }
@@ -168,6 +175,18 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 
 - (void)setDocumentView:(NSView*)aDocumentView       { _documentView = [self replaceView:_documentView withView:aDocumentView]; [self updateKeyViewLoop]; }
 
+- (void)setSidebarThemeBackgroundColor:(NSColor*)color
+{
+	_sidebarThemeBackgroundColor = color;
+	((ProjectSidebarBackgroundView*)_sidebar).themeBackgroundColor = color;
+}
+
+- (void)setSidebarThemeIsDark:(BOOL)dark
+{
+	_sidebarThemeIsDark = dark;
+	_sidebar.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+}
+
 - (NSView*)createDividerAlongYAxis:(BOOL)flag
 {
 	NSView* res = OakCreateNSBoxSeparator();
@@ -236,6 +255,8 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 	if(!_sidebar && (_fileBrowserView || _outlineView))
 	{
 		_sidebar = [[ProjectSidebarBackgroundView alloc] initWithFrame:NSZeroRect];
+		((ProjectSidebarBackgroundView*)_sidebar).themeBackgroundColor = _sidebarThemeBackgroundColor;
+		_sidebar.appearance = [NSAppearance appearanceNamed:_sidebarThemeIsDark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
 		_sidebar.clipsToBounds = YES;
 		_sidebarWidthConstraint = [_sidebar.widthAnchor constraintEqualToConstant:_fileBrowserWidth];
 		_sidebarWidthConstraint.priority = NSLayoutPriorityDragThatCannotResizeWindow;

@@ -118,6 +118,57 @@ def theme(name, theme_id, dark):
                                        for scope, color in palette.items()]}
 
 
+def prism_night_theme():
+    """An original warm charcoal theme with vivid, readable syntax colors."""
+    colors = {
+        "background": "#302D32", "foreground": "#F4F1EC", "caret": "#FFF8E9",
+        "selection": "#77717D88", "lineHighlight": "#FFFFFF0C",
+        "invisibles": "#736E77",
+    }
+    # These selectors cover both grammar scopes and the scopes produced by LSP
+    # semantic tokens. More specific selectors follow their general categories.
+    syntax = [
+        ("Comment", "comment", "#96909A"),
+        ("String", "string", "#F1D47E"),
+        ("Regular expression", "string.regexp", "#F3A778"),
+        ("Escape sequence", "constant.character.escape", "#F3A778"),
+        ("Keyword and storage", "keyword, storage", "#F87196"),
+        ("Operator", "keyword.operator", "#F3A778"),
+        ("Type declaration", "storage.type", "#88D4DB"),
+        ("Number and language constant", "constant.numeric, constant.language", "#B8A4EE"),
+        ("Constant", "constant.other, variable.other.constant", "#B8A4EE"),
+        ("Function and method", "entity.name.function, variable.function, support.function", "#A9D984"),
+        ("Event", "entity.name.event", "#A9D984"),
+        ("Type and namespace", "entity.name.type, entity.name.class, entity.name.namespace, entity.other.inherited-class, support.type, support.class", "#88D4DB"),
+        ("Tag", "entity.name.tag", "#F87196"),
+        ("Attribute", "entity.other.attribute-name", "#88D4DB"),
+        ("Variable", "variable, support.variable, support.other.variable", "#F4F1EC"),
+        ("Parameter", "variable.parameter", "#F3A778"),
+        ("Property", "variable.other.property, variable.other.member, support.type.property-name", "#E5E0D9"),
+        ("Language variable", "variable.language", "#C3B4F0"),
+        ("Library constant", "support.constant", "#B8A4EE"),
+        ("Punctuation", "punctuation", "#ABA5AE"),
+        ("Heading", "markup.heading", "#F1D47E"),
+        ("Link", "markup.underline.link", "#A9D984"),
+        ("Raw text", "markup.raw", "#F3A778"),
+        ("Quote", "markup.quote", "#ABA5AE"),
+        ("Invalid", "invalid", "#FF829A"),
+    ]
+    return {
+        "name": "Prism Night", "uuid": identifier("theme.prism-night"),
+        "colorSpaceName": "sRGB", "semanticClass": "theme.dark.prism-night",
+        "gutterSettings": {
+            "background": "#29272B", "foreground": "#88828C", "divider": "#49444D",
+            "icons": "#88828C", "iconsHover": "#D8D2DC",
+            "selectionBackground": "#49444D", "selectionForeground": "#F4F1EC",
+        },
+        "settings": [{"settings": colors}] + [
+            {"name": name, "scope": scope, "settings": {"foreground": color}}
+            for name, scope, color in syntax
+        ],
+    }
+
+
 def write_plist(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as file:
@@ -133,6 +184,7 @@ def main(destination):
                 theme("Built-in Light", "71D40D9D-AE48-11D9-920A-000D93589AF6", False))
     write_plist(bundle / "Themes" / "Built-in Dark.tmTheme",
                 theme("Built-in Dark", "766026CB-703D-4610-B070-8DE07D967C5F", True))
+    write_plist(bundle / "Themes" / "Prism Night.tmTheme", prism_night_theme())
 
 
 if __name__ == "__main__":

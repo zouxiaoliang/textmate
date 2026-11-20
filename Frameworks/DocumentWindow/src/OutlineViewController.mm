@@ -177,6 +177,12 @@ namespace
 	]];
 }
 
+- (void)setThemeBackgroundColor:(NSColor*)color
+{
+	[self loadViewIfNeeded];
+	self.outlineView.backgroundColor = color ?: NSColor.controlBackgroundColor;
+}
+
 // ================================
 // = Document and panel lifecycle =
 // ================================
