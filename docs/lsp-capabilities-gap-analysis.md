@@ -72,7 +72,6 @@ We declare `relatedInformation: true` but discard the data in `handleDiagnostics
 
 | Capability | Reason |
 |---|---|
-| workspace/semanticTokens/refresh | Semantic tokens not implemented |
 | workspace/codeLens/refresh | CodeLens not implemented |
 | workspace/inlayHint/refresh | Inlay hints not implemented |
 | workspace/diagnostic/refresh | Using push diagnostics model |

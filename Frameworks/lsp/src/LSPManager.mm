@@ -1,6 +1,7 @@
 #import "LSPManager.h"
 #import "LSPClient.h"
 #import "LSPServerSelection.h"
+#import "LSPSemanticTokens.h"
 #import <document/OakDocument Private.h>
 #import <settings/settings.h>
 #import <text/types.h>
@@ -8,6 +9,7 @@
 #import <ns/ns.h>
 #import <oak/oak.h>
 #import <OakFoundation/NSString Additions.h>
+#include <limits>
 
 NSString* const LSPDiagnosticsDidChangeNotification = @"LSPDiagnosticsDidChange";
 NSString* const LSPServerStatusDidChangeNotification = @"LSPServerStatusDidChange";
@@ -65,6 +67,85 @@ static NSString* languageIdForScope (NSString* fileType)
 		return [fileType substringFromIndex:7];
 
 	return @"plaintext";
+}
+
+// Match familiar TextMate theme selectors while retaining the grammar scopes
+// beneath the semantic scope. Unknown token types keep their grammar styling.
+static std::string scopeForSemanticToken (NSString* type, uint32_t modifiers, NSArray<NSString*>* legend)
+{
+	static NSDictionary<NSString*, NSString*>* scopes = @{
+		@"namespace": @"entity.name.namespace", @"type": @"entity.name.type",
+		@"class": @"entity.name.type.class", @"enum": @"entity.name.type.enum",
+		@"interface": @"entity.name.type.interface", @"struct": @"entity.name.type.struct",
+		@"typeParameter": @"entity.name.type.parameter", @"parameter": @"variable.parameter",
+		@"variable": @"variable.other", @"property": @"variable.other.property",
+		@"enumMember": @"constant.other.enum", @"event": @"entity.name.event",
+		@"function": @"entity.name.function", @"method": @"entity.name.function.member",
+		@"macro": @"entity.name.function.macro", @"keyword": @"keyword",
+		@"modifier": @"storage.modifier", @"comment": @"comment",
+		@"string": @"string", @"number": @"constant.numeric",
+		@"regexp": @"string.regexp", @"operator": @"keyword.operator",
+		@"decorator": @"entity.name.function.decorator"
+	};
+	if([@[ @"variable", @"property" ] containsObject:type])
+	{
+		NSUInteger index = [legend indexOfObject:@"readonly"];
+		if(index < 32 && (modifiers & (uint32_t(1) << index)))
+			return "constant.other";
+	}
+	return to_s(scopes[type] ?: @"");
+}
+
+std::vector<ng::buffer_t::semantic_range_t> lsp::decode_semantic_tokens (NSArray* data, NSArray<NSString*>* types, NSArray<NSString*>* modifiers, ng::buffer_t const& buffer)
+{
+	std::vector<ng::buffer_t::semantic_range_t> ranges;
+	if(data.count % 5 != 0)
+		return ranges;
+	uint64_t line = 0, column = 0;
+	NSUInteger cachedLine = NSNotFound;
+	NSString* lineText = nil;
+	for(NSUInteger i = 0; i < data.count; i += 5)
+	{
+		for(NSUInteger j = 0; j < 5; ++j)
+			if(![data[i + j] isKindOfClass:NSNumber.class] || [data[i + j] longLongValue] < 0)
+				return {};
+		uint64_t deltaLine = [data[i] unsignedLongLongValue];
+		uint64_t deltaColumn = [data[i + 1] unsignedLongLongValue];
+		uint64_t length = [data[i + 2] unsignedLongLongValue];
+		uint64_t typeIndex = [data[i + 3] unsignedLongLongValue];
+		uint32_t flags = [data[i + 4] unsignedIntValue];
+		if(deltaLine > std::numeric_limits<uint64_t>::max() - line)
+			return {};
+		line += deltaLine;
+		if(line >= buffer.lines())
+			return {};
+		if(deltaLine) column = 0;
+		if(deltaColumn > std::numeric_limits<uint64_t>::max() - column)
+			return {};
+		column += deltaColumn;
+		if(line != cachedLine)
+		{
+			std::string bytes = buffer.substr(buffer.begin(line), buffer.eol(line));
+			lineText = [[NSString alloc] initWithBytes:bytes.data() length:bytes.size() encoding:NSUTF8StringEncoding];
+			if(!lineText) return {};
+			cachedLine = line;
+		}
+		if(length == 0 || column > lineText.length || length > lineText.length - column || typeIndex >= types.count)
+			continue;
+		std::string semanticScope = scopeForSemanticToken(types[typeIndex], flags, modifiers);
+		if(semanticScope.empty())
+			continue;
+		NSData* before = [[lineText substringToIndex:column] dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+		NSData* token = [[lineText substringWithRange:NSMakeRange(column, length)] dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+		if(!before || !token || !token.length)
+			continue;
+		size_t from = buffer.begin(line) + before.length;
+		size_t to = from + token.length;
+		if(to > buffer.eol(line) || (!ranges.empty() && from < ranges.back().to))
+			continue;
+		ranges.push_back({from, to, semanticScope});
+	}
+	return ranges;
 }
 
 // Uses shared LSPLanguageIdForExtension() from LSPClient.mm
@@ -212,10 +293,13 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSMutableSet<NSUUID*>*                                   _openDocuments;
 	NSMutableDictionary<NSUUID*, NSTimer*>*                  _changeTimers;
 	NSMutableDictionary<NSUUID*, NSArray*>*                  _documentSymbols;
+	NSMutableDictionary<NSUUID*, NSNumber*>*                 _semanticTokenRequests;
 	NSMutableDictionary<NSString*, NSArray<NSDictionary*>*>* _diagnosticsByURI;
 	NSMutableDictionary<NSString*, NSString*>*               _diagnosticReportIdentifiers;
 	NSMutableSet<NSString*>* _clearCacheClients;
 }
+- (void)requestSemanticTokensForDocument:(OakDocument*)document;
+- (void)clearSemanticTokensForDocument:(OakDocument*)document;
 @end
 
 @implementation LSPManager
@@ -239,6 +323,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		_openDocuments      = [NSMutableSet new];
 		_changeTimers       = [NSMutableDictionary new];
 		_documentSymbols    = [NSMutableDictionary new];
+		_semanticTokenRequests = [NSMutableDictionary new];
 		_diagnosticsByURI   = [NSMutableDictionary new];
 		_diagnosticReportIdentifiers = [NSMutableDictionary new];
 		_clearCacheClients  = [NSMutableSet new];
@@ -361,12 +446,76 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	[client openDocument:document languageId:langId];
 }
 
+- (void)clearSemanticTokensForDocument:(OakDocument*)document
+{
+	NSUUID* docId = document.identifier;
+	NSNumber* request = _semanticTokenRequests[docId];
+	if(request)
+	{
+		[_documentClients[docId] cancelRequest:request.intValue];
+		[_semanticTokenRequests removeObjectForKey:docId];
+	}
+	if(document.isLoaded)
+		[document buffer].set_semantic_scopes({});
+}
+
+- (void)requestSemanticTokensForDocument:(OakDocument*)document
+{
+	NSUUID* docId = document.identifier;
+	LSPClient* client = _documentClients[docId];
+	if(!client || !client.running || !client.initialized || (!client.semanticTokensFullProvider && !client.semanticTokensRangeProvider) || !document.isLoaded || !document.path || ![_openDocuments containsObject:docId])
+		return;
+	NSNumber* oldRequest = _semanticTokenRequests[docId];
+	if(oldRequest)
+		[client cancelRequest:oldRequest.intValue];
+	[_semanticTokenRequests removeObjectForKey:docId];
+
+	NSString* path = [document.path copy];
+	size_t revision = [document buffer].revision();
+	NSNumber* version = _documentVersions[docId];
+	NSArray<NSString*>* types = client.semanticTokenTypes;
+	NSArray<NSString*>* modifiers = client.semanticTokenModifiers;
+	NSMutableDictionary* params = [@{ @"textDocument": @{ @"uri": [NSURL fileURLWithPath:path].absoluteString } } mutableCopy];
+	NSString* method = @"textDocument/semanticTokens/full";
+	if(!client.semanticTokensFullProvider)
+	{
+		method = @"textDocument/semanticTokens/range";
+		ng::buffer_t const& buffer = [document buffer];
+		size_t lastLine = buffer.lines() - 1;
+		NSString* lastLineText = to_ns(buffer.substr(buffer.begin(lastLine), buffer.eol(lastLine)));
+		params[@"range"] = @{ @"start": @{ @"line": @0, @"character": @0 },
+			@"end": @{ @"line": @(lastLine), @"character": @(lastLineText.length) } };
+	}
+	__block int requestId = -1;
+	__weak LSPManager* weakSelf = self;
+	requestId = [client sendCustomRequest:method params:params completion:^(id response) {
+		LSPManager* manager = weakSelf;
+		if(!manager || ![manager->_semanticTokenRequests[docId] isEqual:@(requestId)]) return;
+		[manager->_semanticTokenRequests removeObjectForKey:docId];
+		if(manager->_documentClients[docId] != client || ![manager->_documentVersions[docId] isEqual:version] ||
+			!document.isLoaded || ![document.path isEqualToString:path] || [document buffer].revision() != revision)
+			return;
+		if(response == NSNull.null)
+		{
+			[document buffer].set_semantic_scopes({});
+			return;
+		}
+		if(![response isKindOfClass:NSDictionary.class] || ![response[@"data"] isKindOfClass:NSArray.class])
+			return;
+		auto ranges = lsp::decode_semantic_tokens(response[@"data"], types, modifiers, [document buffer]);
+		[document buffer].set_semantic_scopes(ranges);
+	}];
+	if(requestId >= 0)
+		_semanticTokenRequests[docId] = @(requestId);
+}
+
 - (void)documentDidChange:(OakDocument*)document
 {
 	NSUUID* docId = document.identifier;
 	if(![_openDocuments containsObject:docId])
 		return;
 
+	[self clearSemanticTokensForDocument:document];
 	[_documentSymbols removeObjectForKey:docId];
 	[_changeTimers[docId] invalidate];
 
@@ -388,6 +537,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	int version = [_documentVersions[docId] intValue] + 1;
 	_documentVersions[docId] = @(version);
 	[client documentDidChange:document version:version];
+	[self requestSemanticTokensForDocument:document];
 }
 
 - (void)documentDidSave:(OakDocument*)document
@@ -414,6 +564,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	if(![_openDocuments containsObject:docId])
 		return;
 
+	[self clearSemanticTokensForDocument:document];
 	[_changeTimers[docId] invalidate];
 	[_changeTimers removeObjectForKey:docId];
 
@@ -437,6 +588,9 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 - (void)shutdownAll
 {
+	for(NSUUID* docId in _openDocuments)
+		if(OakDocument* document = [OakDocument documentWithIdentifier:docId])
+			[self clearSemanticTokensForDocument:document];
 	for(NSTimer* timer in _changeTimers.allValues)
 		[timer invalidate];
 	[_changeTimers removeAllObjects];
@@ -469,6 +623,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	int version = [_documentVersions[docId] intValue] + 1;
 	_documentVersions[docId] = @(version);
 	[client documentDidChange:document version:version];
+	[self requestSemanticTokensForDocument:document];
 }
 
 - (void)requestCompletionsForDocument:(OakDocument*)document line:(NSUInteger)line character:(NSUInteger)character prefix:(NSString*)prefix completion:(void(^)(NSArray<NSDictionary*>*))callback
@@ -942,6 +1097,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	for(OakDocument* doc in affectedDocs)
 	{
 		NSUUID* docId = doc.identifier;
+		[self clearSemanticTokensForDocument:doc];
 		[_changeTimers[docId] invalidate];
 		[_changeTimers removeObjectForKey:docId];
 		[_documentClients removeObjectForKey:docId];
@@ -1017,11 +1173,29 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 #pragma mark - LSPClientDelegate
 
+- (void)lspClient:(LSPClient*)client didReceiveNotification:(NSString*)method params:(NSDictionary*)params
+{
+	if(![method isEqualToString:@"workspace/semanticTokens/refresh"])
+		return;
+	for(NSUUID* docId in [_openDocuments copy])
+	{
+		if(_documentClients[docId] != client)
+			continue;
+		if(OakDocument* doc = [OakDocument documentWithIdentifier:docId])
+		{
+			[self flushPendingChangesForDocument:doc];
+		}
+	}
+}
+
 - (void)lspClient:(LSPClient*)client didOpenDocument:(OakDocument*)document
 {
 	// An older client may still be finishing a deferred didOpen after a restart.
 	if(_documentClients[document.identifier] == client)
+	{
 		[NSNotificationCenter.defaultCenter postNotificationName:LSPDocumentDidOpenNotification object:document];
+		[self requestSemanticTokensForDocument:document];
+	}
 }
 
 - (void)lspClient:(LSPClient*)client didReceiveApplyEditRequest:(NSDictionary*)workspaceEdit requestId:(id)requestId
@@ -1055,6 +1229,8 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 	for(NSUUID* docId in docIdsToRemove)
 	{
+		if(OakDocument* doc = [OakDocument documentWithIdentifier:docId])
+			[self clearSemanticTokensForDocument:doc];
 		[_changeTimers[docId] invalidate];
 		[_changeTimers removeObjectForKey:docId];
 		[_documentClients removeObjectForKey:docId];

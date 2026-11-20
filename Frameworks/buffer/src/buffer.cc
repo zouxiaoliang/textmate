@@ -256,6 +256,46 @@ namespace ng
 
 		std::map<size_t, bool> const m = misspellings(from, to);
 
+		// Semantic scopes only affect drawing. Keep the grammar scopes intact for
+		// bundle commands, symbols, indentation, and scope-sensitive settings.
+		if(!_semantic_scopes.empty() && from < to)
+		{
+			std::map<size_t, std::string> semantic;
+			auto active = _semantic_scopes.upper_bound(from);
+			if(active != _semantic_scopes.begin())
+				semantic.emplace(0, std::prev(active)->second);
+			for(auto it = active; it != _semantic_scopes.end() && it->first < to; ++it)
+				semantic.emplace(it->first - from, it->second);
+
+			std::map<size_t, scope::scope_t> combined;
+			auto lexical = scopes.begin();
+			auto nextLexical = std::next(lexical);
+			auto nextSemantic = semantic.begin();
+			std::string currentSemantic;
+			for(size_t offset = 0; offset < to - from; )
+			{
+				if(nextLexical != scopes.end() && nextLexical->first == offset)
+				{
+					lexical = nextLexical;
+					++nextLexical;
+				}
+				if(nextSemantic != semantic.end() && nextSemantic->first == offset)
+				{
+					currentSemantic = nextSemantic->second;
+					++nextSemantic;
+				}
+				scope::scope_t value = lexical->second;
+				if(!currentSemantic.empty())
+					value.push_scope(currentSemantic);
+				combined.emplace(offset, value);
+				size_t next = to - from;
+				if(nextLexical != scopes.end()) next = std::min(next, nextLexical->first);
+				if(nextSemantic != semantic.end()) next = std::min(next, nextSemantic->first);
+				offset = next;
+			}
+			scopes.swap(combined);
+		}
+
 		auto scopeIter       = scopes.begin();
 		auto spellingIter    = m.begin();
 		scope::scope_t scope = scopeIter->second;
@@ -293,6 +333,26 @@ namespace ng
 		}
 
 		return scopes;
+	}
+
+	void buffer_t::set_semantic_scopes (std::vector<semantic_range_t> const& ranges)
+	{
+		if(_semantic_scopes.empty() && ranges.empty())
+			return;
+		std::map<size_t, std::string> updated;
+		size_t previousEnd = 0;
+		for(auto const& range : ranges)
+		{
+			if(range.from >= range.to || range.to > size() || range.from < previousEnd || range.scope.empty())
+				continue;
+			updated[range.from] = range.scope;
+			updated[range.to] = "";
+			previousEnd = range.to;
+		}
+		if(updated == _semantic_scopes)
+			return;
+		_semantic_scopes.swap(updated);
+		did_parse(0, size());
 	}
 
 	// =============

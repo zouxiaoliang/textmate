@@ -13,6 +13,7 @@
 #include <regexp/regexp.h>
 #include <oak/debug.h>
 #include <ns/spellcheck.h>
+#include <vector>
 
 namespace ng
 {
@@ -80,6 +81,12 @@ namespace ng
 
 	struct buffer_t : buffer_api_t
 	{
+		struct semantic_range_t
+		{
+			size_t from, to;
+			std::string scope;
+		};
+
 		buffer_t ();
 		buffer_t (char const* str);
 		buffer_t (buffer_t const& rhs) = delete;
@@ -126,6 +133,7 @@ namespace ng
 
 		scope::context_t scope (size_t i, bool includeDynamic = true) const;
 		std::map<size_t, scope::scope_t> scopes (size_t from, size_t to) const;
+		void set_semantic_scopes (std::vector<semantic_range_t> const& ranges);
 
 		std::map<size_t, std::string> symbols () const;
 		std::string symbol_at (size_t i) const;
@@ -230,6 +238,7 @@ namespace ng
 		indexed_map_t<bool>              _hardlines;
 		indexed_map_t<bool>              _dirty;
 		indexed_map_t<scope::scope_t>    _scopes;
+		std::map<size_t, std::string>   _semantic_scopes;
 		indexed_map_t<parse::stack_ptr>  _parser_states;
 
 		std::shared_ptr<spelling_t> _spelling;

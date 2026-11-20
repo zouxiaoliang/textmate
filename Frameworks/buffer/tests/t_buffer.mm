@@ -172,6 +172,28 @@ void test_spelling_4 ()
 	OAK_ASSERT_EQ(bad.size(), 0);
 }
 
+void test_semantic_scopes_overlay ()
+{
+	ng::buffer_t buf;
+	buf.set_grammar(TestGrammarItem);
+	buf.insert(0, "foo bar");
+	buf.bump_revision();
+	buf.wait_for_repair();
+
+	buf.set_semantic_scopes({ { 1, 3, "entity.name.function" }, { 4, 7, "variable.other" } });
+	auto scopes = buf.scopes(0, buf.size());
+	OAK_ASSERT_EQ(to_s(scopes.at(0)), "test foo");
+	OAK_ASSERT_EQ(to_s(scopes.at(1)), "test foo entity.name.function");
+	OAK_ASSERT_EQ(to_s(scopes.at(3)), "test");
+	OAK_ASSERT_EQ(to_s(scopes.at(4)), "test bar variable.other");
+	OAK_ASSERT_EQ(to_s(buf.scopes(2, 5).at(0)), "test foo entity.name.function");
+	OAK_ASSERT_EQ(to_s(buf.scope(2).right), "test foo");
+
+	buf.set_semantic_scopes({});
+	OAK_ASSERT_EQ(to_s(buf.scopes(0, buf.size()).at(0)), "test foo");
+	OAK_ASSERT_EQ(buf.scopes(0, buf.size()).count(1), 0);
+}
+
 void test_scopes ()
 {
 	ng::buffer_t buf;

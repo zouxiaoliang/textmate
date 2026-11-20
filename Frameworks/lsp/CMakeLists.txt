@@ -19,4 +19,8 @@ if(BUILD_TESTING)
   target_compile_definitions(lsp_integration PRIVATE
     LSP_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
   add_test(NAME lsp_integration COMMAND lsp_integration)
+
+  add_executable(lsp_semantic tests/lsp_semantic.mm)
+  target_link_libraries(lsp_semantic PRIVATE lsp ${TEXTMATE_DEBUG_LIBS})
+  add_test(NAME lsp_semantic COMMAND lsp_semantic)
 endif()

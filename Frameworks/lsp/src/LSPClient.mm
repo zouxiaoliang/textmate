@@ -145,6 +145,10 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 	BOOL _renameProvider;
 	BOOL _codeActionProvider;
 	BOOL _codeActionResolveProvider;
+	BOOL _semanticTokensFullProvider;
+	BOOL _semanticTokensRangeProvider;
+	NSArray<NSString*>* _semanticTokenTypes;
+	NSArray<NSString*>* _semanticTokenModifiers;
 	BOOL _documentDiagnosticProvider;
 	BOOL _diagnosticInterFileDependencies;
 	NSString* _diagnosticIdentifier;
@@ -617,6 +621,13 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				[self sendMessage:response];
 				[self scheduleAllDiagnostics];
 			}
+			else if(method == "workspace/semanticTokens/refresh")
+			{
+				json response = {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nullptr}};
+				[self sendMessage:response];
+				if([_delegate respondsToSelector:@selector(lspClient:didReceiveNotification:params:)])
+					[_delegate lspClient:self didReceiveNotification:@"workspace/semanticTokens/refresh" params:@{}];
+			}
 			else if(method == "window/showMessageRequest")
 			{
 				std::string message = msg["params"].contains("message") ? msg["params"]["message"].get<std::string>() : "";
@@ -894,6 +905,30 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 					if(utf16 && found != caps.end() && (found->is_object() || (found->is_boolean() && found->get<bool>()))) [queries addObject:method];
 				}
 				_languageQueries = queries;
+				if(utf16 && caps.contains("semanticTokensProvider") && caps["semanticTokensProvider"].is_object())
+				{
+					auto const& provider = caps["semanticTokensProvider"];
+					BOOL full = provider.contains("full") && (provider["full"].is_object() || (provider["full"].is_boolean() && provider["full"].get<bool>()));
+					BOOL range = provider.contains("range") && (provider["range"].is_object() || (provider["range"].is_boolean() && provider["range"].get<bool>()));
+					if((full || range) && provider.contains("legend") && provider["legend"].is_object())
+						{
+						NSMutableArray<NSString*>* types = [NSMutableArray new];
+						NSMutableArray<NSString*>* modifiers = [NSMutableArray new];
+						auto const& legend = provider["legend"];
+						if(legend.contains("tokenTypes") && legend["tokenTypes"].is_array())
+							for(auto const& type : legend["tokenTypes"])
+								if(type.is_string()) [types addObject:to_ns(type.get<std::string>())];
+						if(legend.contains("tokenModifiers") && legend["tokenModifiers"].is_array())
+							for(auto const& modifier : legend["tokenModifiers"])
+								if(modifier.is_string()) [modifiers addObject:to_ns(modifier.get<std::string>())];
+						_semanticTokenTypes = types;
+						_semanticTokenModifiers = modifiers;
+						_semanticTokensFullProvider = full;
+						_semanticTokensRangeProvider = range;
+						if(full) [queries addObject:@"textDocument/semanticTokens/full"];
+						if(range) [queries addObject:@"textDocument/semanticTokens/range"];
+					}
+				}
 				if(caps.contains("diagnosticProvider") && caps["diagnosticProvider"].is_object())
 				{
 					auto const& diagnostic = caps["diagnosticProvider"];
@@ -1195,6 +1230,15 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 					{"dynamicRegistration", false},
 					{"relatedDocumentSupport", false}
 				}},
+				{"semanticTokens", {
+					{"dynamicRegistration", false},
+					{"requests", {{"full", true}, {"range", true}}},
+					{"tokenTypes", {"namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"}},
+					{"tokenModifiers", {"declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"}},
+					{"formats", {"relative"}},
+					{"multilineTokenSupport", false},
+					{"overlappingTokenSupport", false}
+				}},
 				{"synchronization", {
 					{"didSave", true},
 					{"dynamicRegistration", false}
@@ -1239,6 +1283,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 			{"workspace", {
 				{"symbol", {{"dynamicRegistration", false}}},
 				{"diagnostics", {{"refreshSupport", true}}},
+				{"semanticTokens", {{"refreshSupport", true}}},
 				{"didChangeWatchedFiles", {
 					{"dynamicRegistration", true},
 					{"relativePatternSupport", true}
