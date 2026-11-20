@@ -1292,6 +1292,8 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 	[self scheduleDiagnosticsForURI:fileURL.absoluteString];
 	if(_diagnosticInterFileDependencies)
 		[self scheduleAllDiagnostics];
+	if([_delegate respondsToSelector:@selector(lspClient:didOpenDocument:)])
+		[_delegate lspClient:self didOpenDocument:document];
 }
 
 - (void)openDocument:(OakDocument*)document languageId:(NSString*)languageId

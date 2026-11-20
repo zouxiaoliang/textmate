@@ -119,6 +119,13 @@
 	[menu addItemWithTitle:@"Other…" action:@selector(selectOtherFileBrowserPath:) keyEquivalent:@""];
 }
 
+- (void)takeTitleBarHeightFrom:(NSTextField*)sender
+{
+	NSInteger height = NormalizeTitleBarHeight(sender.integerValue);
+	sender.objectValue = @(height);
+	[NSUserDefaults.standardUserDefaults setInteger:height forKey:kUserDefaultsTitleBarHeightKey];
+}
+
 - (void)loadView
 {
 	NSPopUpButton* fileBrowserLocationPopUp            = OakCreatePopUpButton();
@@ -134,6 +141,26 @@
 	NSButton* showTabsInFullScreenCheckBox             = OakCreateCheckBox(@"Show in full screen");
 	NSButton* reOrderWhenOpeningAFileCheckBox          = OakCreateCheckBox(@"Re-order when opening a file");
 	NSButton* automaticallyCloseUnusedTabsCheckBox     = OakCreateCheckBox(@"Automatically close unused tabs");
+	NSTextField* titleBarHeightLabel                   = OakCreateLabel(@"Title bar height:");
+	NSTextField* titleBarHeightField                   = [NSTextField textFieldWithString:@""];
+	NSString* titleBarHeightHint = [NSString stringWithFormat:@"pt (0 = Automatic, %ld–%ld custom)", (long)kMinimumTitleBarHeight, (long)kMaximumTitleBarHeight];
+	NSTextField* titleBarHeightHintLabel = OakCreateLabel(titleBarHeightHint);
+	titleBarHeightHintLabel.textColor = NSColor.secondaryLabelColor;
+	NSNumberFormatter* titleBarHeightFormatter = [NSNumberFormatter new];
+	titleBarHeightFormatter.numberStyle = NSNumberFormatterDecimalStyle;
+	titleBarHeightFormatter.allowsFloats = NO;
+	titleBarHeightFormatter.usesGroupingSeparator = NO;
+	titleBarHeightField.formatter = titleBarHeightFormatter;
+	titleBarHeightField.objectValue = @(NormalizeTitleBarHeight([NSUserDefaults.standardUserDefaults integerForKey:kUserDefaultsTitleBarHeightKey]));
+	titleBarHeightField.accessibilityTitleUIElement = titleBarHeightLabel;
+	titleBarHeightField.accessibilityHelp = titleBarHeightHint;
+	titleBarHeightField.target = self;
+	titleBarHeightField.action = @selector(takeTitleBarHeightFrom:);
+	titleBarHeightField.cell.sendsActionOnEndEditing = YES;
+	[titleBarHeightField.widthAnchor constraintEqualToConstant:52].active = YES;
+	NSStackView* titleBarHeightControls = [NSStackView stackViewWithViews:@[ titleBarHeightField, titleBarHeightHintLabel ]];
+	titleBarHeightControls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+	titleBarHeightControls.alignment = NSLayoutAttributeFirstBaseline;
 
 	NSTextField* excludeFilesTextField                 = [NSTextField textFieldWithString:@""];
 	NSTextField* includeFilesTextField                 = [NSTextField textFieldWithString:@""];
@@ -161,13 +188,14 @@
 		@[ NSGridCell.emptyContentView,                openFilesOnSingleClickCheckBox           ],
 		@[ NSGridCell.emptyContentView,                keepCurrentDocumentSelectedCheckBox      ],
 		@[ ],
-		@[ OakCreateLabel(@"Show file browser on:"),   fileBrowserPositionPopUp                 ],
+		@[ OakCreateLabel(@"Show project sidebar on:"), fileBrowserPositionPopUp                ],
 		@[ NSGridCell.emptyContentView,                adjustWindowWhenTogglingDisplayCheckBox  ],
 		@[ ],
 		@[ OakCreateLabel(@"Document tabs:"),          showForSingleDocumentCheckBox            ],
 		@[ NSGridCell.emptyContentView,                showTabsInFullScreenCheckBox            ],
 		@[ NSGridCell.emptyContentView,                reOrderWhenOpeningAFileCheckBox          ],
 		@[ NSGridCell.emptyContentView,                automaticallyCloseUnusedTabsCheckBox     ],
+		@[ titleBarHeightLabel,                        titleBarHeightControls                  ],
 		@[ ],
 		@[ OakCreateLabel(@"Exclude files matching:"), excludeFilesTextField                    ],
 		@[ OakCreateLabel(@"Include files matching:"), includeFilesTextField                    ],
@@ -183,7 +211,7 @@
 	for(NSView* textField in @[ includeFilesTextField, nonTextFilesTextField ])
 		[textField.widthAnchor constraintEqualToAnchor:excludeFilesTextField.widthAnchor].active = YES;
 
-	self.view = OakSetupGridViewWithSeparators(gridView, { 5, 8, 12, 16 });
+	self.view = OakSetupGridViewWithSeparators(gridView, { 5, 8, 14, 18 });
 
 	fileBrowserPathPopUp = fileBrowserLocationPopUp;
 	[self updatePathPopUp];

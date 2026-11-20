@@ -22,7 +22,7 @@ static NSDictionary* default_settings ()
 {
 	return @{
 		kUserDefaultsHTMLOutputPlacementKey:     @"window",
-		kUserDefaultsFileBrowserPlacementKey:    @"right",
+		kUserDefaultsFileBrowserPlacementKey:    @"left",
 		kUserDefaultsShowFileExtensionsKey:      @NO,
 		kUserDefaultsEnvironmentVariablesKey:    default_environment(),
 		kUserDefaultsDisableBundleUpdatesKey:    @NO,
@@ -35,6 +35,7 @@ static NSDictionary* default_settings ()
 		kUserDefaultsLineNumberScaleFactorKey:    @(0.8),
 		kUserDefaultsTabItemMinWidthKey:          @(120),
 		kUserDefaultsTabItemMaxWidthKey:          @(250),
+		kUserDefaultsTitleBarHeightKey:          @0,
 		kUserDefaultsClipboardHistoryKeepAtLeast: @(25),
 		kUserDefaultsClipboardHistoryKeepAtMost:  @(500),
 		kUserDefaultsClipboardHistoryDaysToKeep:  @(30),
@@ -51,6 +52,14 @@ static bool register_defaults ()
 void RegisterDefaults ()
 {
 	static bool __attribute__ ((unused)) dummy = register_defaults();
+}
+
+NSInteger const kMinimumTitleBarHeight = 24;
+NSInteger const kMaximumTitleBarHeight = 64;
+
+NSInteger NormalizeTitleBarHeight (NSInteger height)
+{
+	return height <= 0 ? 0 : MIN(kMaximumTitleBarHeight, MAX(kMinimumTitleBarHeight, height));
 }
 
 // =========
@@ -80,6 +89,7 @@ NSString* const kUserDefaultsDisableTabReorderingKey           = @"disableTabReo
 NSString* const kUserDefaultsDisableTabAutoCloseKey            = @"disableTabAutoClose";
 NSString* const kUserDefaultsDisableTabBarCollapsingKey        = @"disableTabBarCollapsing";
 NSString* const kUserDefaultsHideTabsInFullScreenKey           = @"hideTabsInFullScreen";
+NSString* const kUserDefaultsTitleBarHeightKey                  = @"titleBarHeight";
 NSString* const kUserDefaultsAllowExpandingLinksKey            = @"allowExpandingLinks";
 NSString* const kUserDefaultsAllowExpandingPackagesKey         = @"allowExpandingPackages";
 

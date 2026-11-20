@@ -4,6 +4,8 @@
 #import <document/OakDocument.h>
 #import <text/types.h>
 
+extern NSNotificationName const OakNavigationHistoryDidChangeNotification;
+
 // One visited location: the file it was in and the selection to restore.
 @interface OakNavigationEntry : NSObject
 @property (nonatomic, readonly) NSString* path;

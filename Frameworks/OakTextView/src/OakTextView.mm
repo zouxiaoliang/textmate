@@ -423,11 +423,7 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 	if(scopedThemeUUID != NULL_STR)
 		return to_ns(scopedThemeUUID);
 
-	NSString* appearance = [NSUserDefaults.standardUserDefaults stringForKey:@"themeAppearance"];
-	BOOL darkMode = [appearance isEqualToString:@"dark"];
-	// Auto appearance detection is always available on macOS 14.0+
-	if(!darkMode && ![appearance isEqualToString:@"light"]) // If it is not 'light' then assume 'auto'
-		darkMode = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]] isEqualToString:NSAppearanceNameDarkAqua];
+	BOOL darkMode = OakThemeAppearanceIsDark(self.effectiveAppearance);
 
 	return [NSUserDefaults.standardUserDefaults stringForKey:darkMode ? @"darkModeThemeUUID" : @"universalThemeUUID"];
 }
@@ -3638,7 +3634,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 - (void)setDropMarkAtPoint:(NSPoint)aPoint
 {
-	ASSERT(documentView);
+	if(!documentView)
+		return;
 	AUTO_REFRESH;
 	dropPosition = NSEqualPoints(aPoint, NSZeroPoint) ? ng::index_t() : documentView->index_at_point(aPoint).index;
 	documentView->set_drop_marker(dropPosition);
@@ -3746,6 +3743,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 - (BOOL)isPointInSelection:(NSPoint)aPoint
 {
+	if(!documentView)
+		return NO;
 	BOOL res = NO;
 	for(auto const& rect : documentView->rects_for_ranges(documentView->ranges(), kRectsIncludeSelections))
 		res = res || CGRectContainsPoint(rect, aPoint);
@@ -3754,7 +3753,7 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 - (NSDragOperation)dragOperationForInfo:(id <NSDraggingInfo>)info
 {
-	if(macroRecordingArray || [self isHiddenOrHasHiddenAncestor])
+	if(!documentView || macroRecordingArray || [self isHiddenOrHasHiddenAncestor])
 		return NSDragOperationNone;
 
 	NSDragOperation mask = [info draggingSourceOperationMask];
@@ -3797,6 +3796,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 - (BOOL)performDragOperation:(id <NSDraggingInfo>)info
 {
+	if(!documentView)
+		return NO;
 	ASSERT(dropPosition);
 
 	BOOL res = YES;
@@ -4233,6 +4234,8 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 
 - (void)quickLookWithEvent:(NSEvent*)anEvent
 {
+	if(!documentView)
+		return;
 	ng::index_t index = documentView->index_at_point([self convertPoint:[anEvent locationInWindow] fromView:nil]);
 	ng::range_t range = ng::extend(*documentView, index, kSelectionExtendToWord).first();
 

@@ -27,6 +27,7 @@ def span(line=0, column=0):
 
 
 text = ""
+open_documents = set()
 while True:
     headers = {}
     while True:
@@ -47,6 +48,9 @@ while True:
             "documentSymbolProvider": True, "workspaceSymbolProvider": True}})
     elif method == "textDocument/didOpen":
         text = params["textDocument"]["text"]
+        open_documents.add(params["textDocument"]["uri"])
+    elif method == "textDocument/didClose":
+        open_documents.discard(params["textDocument"]["uri"])
     elif method == "textDocument/didChange":
         text = params["contentChanges"][-1]["text"]
     elif method == "textDocument/definition":
@@ -58,8 +62,9 @@ while True:
     elif method == "textDocument/hover":
         reply(identifier, {"contents": {"kind": "plaintext", "value": json.dumps({"text": text, "position": params["position"]})}})
     elif method == "textDocument/documentSymbol":
-        reply(identifier, [{"name": "Outer", "kind": 5, "range": span(), "selectionRange": span(),
-            "children": [{"name": "inner", "kind": 6, "range": span(0, 3), "selectionRange": span(0, 3)}]}])
+        symbols = [{"name": "Outer", "kind": 5, "range": span(), "selectionRange": span(),
+            "children": [{"name": "inner", "kind": 6, "range": span(0, 3), "selectionRange": span(0, 3)}]}]
+        reply(identifier, symbols if params["textDocument"]["uri"] in open_documents else [])
     elif method == "workspace/symbol":
         if params["query"] == "timeout":
             continue

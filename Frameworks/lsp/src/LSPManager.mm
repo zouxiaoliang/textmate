@@ -1,6 +1,7 @@
 #import "LSPManager.h"
 #import "LSPClient.h"
 #import "LSPServerSelection.h"
+#import <document/OakDocument Private.h>
 #import <settings/settings.h>
 #import <text/types.h>
 #import <io/path.h>
@@ -10,6 +11,7 @@
 
 NSString* const LSPDiagnosticsDidChangeNotification = @"LSPDiagnosticsDidChange";
 NSString* const LSPServerStatusDidChangeNotification = @"LSPServerStatusDidChange";
+NSString* const LSPDocumentDidOpenNotification = @"LSPDocumentDidOpen";
 
 static NSDictionary<NSString*, NSString*>* scopeToLanguageId ()
 {
@@ -209,6 +211,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSMutableDictionary<NSUUID*, NSNumber*>*                 _documentVersions;
 	NSMutableSet<NSUUID*>*                                   _openDocuments;
 	NSMutableDictionary<NSUUID*, NSTimer*>*                  _changeTimers;
+	NSMutableDictionary<NSUUID*, NSArray*>*                  _documentSymbols;
 	NSMutableDictionary<NSString*, NSArray<NSDictionary*>*>* _diagnosticsByURI;
 	NSMutableDictionary<NSString*, NSString*>*               _diagnosticReportIdentifiers;
 	NSMutableSet<NSString*>* _clearCacheClients;
@@ -235,6 +238,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		_documentVersions   = [NSMutableDictionary new];
 		_openDocuments      = [NSMutableSet new];
 		_changeTimers       = [NSMutableDictionary new];
+		_documentSymbols    = [NSMutableDictionary new];
 		_diagnosticsByURI   = [NSMutableDictionary new];
 		_diagnosticReportIdentifiers = [NSMutableDictionary new];
 		_clearCacheClients  = [NSMutableSet new];
@@ -363,6 +367,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	if(![_openDocuments containsObject:docId])
 		return;
 
+	[_documentSymbols removeObjectForKey:docId];
 	[_changeTimers[docId] invalidate];
 
 	__weak LSPManager* weakSelf = self;
@@ -419,6 +424,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	[_openDocuments removeObject:docId];
 	[_documentClients removeObjectForKey:docId];
 	[_documentVersions removeObjectForKey:docId];
+	[_documentSymbols removeObjectForKey:docId];
 
 	NSString* path = document.path;
 	if(path)
@@ -441,6 +447,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	[_clients removeAllObjects];
 	[_documentClients removeAllObjects];
 	[_documentVersions removeAllObjects];
+	[_documentSymbols removeAllObjects];
 	[_openDocuments removeAllObjects];
 }
 
@@ -505,6 +512,38 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	}];
 	__weak LSPClient* originalClient = client;
 	return ^{ [originalClient cancelRequest:requestId]; };
+}
+
+- (NSArray*)cachedDocumentSymbolsForDocument:(OakDocument*)document
+{
+	return document ? _documentSymbols[document.identifier] : nil;
+}
+
+- (dispatch_block_t)requestDocumentSymbolsForDocument:(OakDocument*)document completion:(void(^)(NSArray*))callback
+{
+	NSString* path = document.path;
+	if(!path || !document.isLoaded)
+	{
+		callback(nil);
+		return nil;
+	}
+
+	NSUUID* docId = document.identifier;
+	__weak LSPClient* originalClient = _documentClients[docId];
+	size_t revision = [document buffer].revision();
+	NSDictionary* params = @{ @"textDocument": @{ @"uri": [NSURL fileURLWithPath:path].absoluteString } };
+	return [self requestLanguageQuery:@"textDocument/documentSymbol" forDocument:document params:params completion:^(id result, NSString* errorCode){
+		LSPClient* client = originalClient;
+		if(errorCode || !client || _documentClients[docId] != client || !document.isLoaded || ![document.path isEqualToString:path] || [document buffer].revision() != revision)
+		{
+			callback(nil);
+			return;
+		}
+		NSArray* symbols = [result isKindOfClass:NSArray.class] ? result : (result == NSNull.null ? @[] : nil);
+		if(symbols)
+			_documentSymbols[docId] = symbols;
+		callback(symbols);
+	}];
 }
 
 - (void)requestDefinitionForDocument:(OakDocument*)document line:(NSUInteger)line character:(NSUInteger)character completion:(void(^)(NSArray<NSDictionary*>*))callback
@@ -907,6 +946,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		[_changeTimers removeObjectForKey:docId];
 		[_documentClients removeObjectForKey:docId];
 		[_documentVersions removeObjectForKey:docId];
+		[_documentSymbols removeObjectForKey:docId];
 		[_openDocuments removeObject:docId];
 	}
 
@@ -977,6 +1017,13 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 #pragma mark - LSPClientDelegate
 
+- (void)lspClient:(LSPClient*)client didOpenDocument:(OakDocument*)document
+{
+	// An older client may still be finishing a deferred didOpen after a restart.
+	if(_documentClients[document.identifier] == client)
+		[NSNotificationCenter.defaultCenter postNotificationName:LSPDocumentDidOpenNotification object:document];
+}
+
 - (void)lspClient:(LSPClient*)client didReceiveApplyEditRequest:(NSDictionary*)workspaceEdit requestId:(id)requestId
 {
 	dispatch_async(dispatch_get_main_queue(), ^{
@@ -1012,6 +1059,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		[_changeTimers removeObjectForKey:docId];
 		[_documentClients removeObjectForKey:docId];
 		[_documentVersions removeObjectForKey:docId];
+		[_documentSymbols removeObjectForKey:docId];
 		[_openDocuments removeObject:docId];
 	}
 

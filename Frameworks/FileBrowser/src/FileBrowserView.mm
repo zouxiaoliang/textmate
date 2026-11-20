@@ -51,26 +51,17 @@
 		NSDictionary* views = @{
 			@"header":  _headerView,
 			@"files":   _scrollView,
-			@"actions": _actionsView,
 		};
 
 		OakAddAutoLayoutViewsToSuperview(views.allValues, self);
-		[_headerView removeFromSuperview];
-		[self addSubview:_headerView positioned:NSWindowAbove relativeTo:nil];
 
-		OakSetupKeyViewLoop(@[ self, _headerView, _outlineView, _actionsView ]);
+		OakSetupKeyViewLoop(@[ self, _headerView, _outlineView ]);
 
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[files(==header,==actions)]|" options:0 metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[header]-(>=0)-[actions]"     options:NSLayoutFormatAlignAllLeading metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[files][actions]|"            options:NSLayoutFormatAlignAllLeading metrics:nil views:views]];
-
-		NSEdgeInsets insets = _scrollView.contentInsets;
-		insets.top += _headerView.fittingSize.height;
+		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[files(==header)]|" options:0 metrics:nil views:views]];
+		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[header][files]|" options:NSLayoutFormatAlignAllLeading metrics:nil views:views]];
 		_scrollView.automaticallyAdjustsContentInsets = NO;
-		_scrollView.contentInsets = insets;
-
-		_outlineView.backgroundColor = NSColor.controlBackgroundColor; // dynamic (adapts to Light/Dark)
-		_scrollView.drawsBackground  = YES; // ensure adaptive system color is actually drawn
+		_outlineView.backgroundColor = NSColor.controlBackgroundColor;
+		_scrollView.drawsBackground  = NO;
 	}
 	return self;
 }

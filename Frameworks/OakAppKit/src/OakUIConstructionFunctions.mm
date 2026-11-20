@@ -85,6 +85,120 @@ OakRolloverButton* OakCreateCloseButton (NSString* accessibilityLabel)
 	return closeButton;
 }
 
+@interface OakSidebarTreeRowView : NSTableRowView
+@property (nonatomic, weak) OakSidebarTreeView* tree;
+@end
+
+@implementation OakSidebarTreeRowView
+- (void)drawBackgroundInRect:(NSRect)dirtyRect
+{
+	[super drawBackgroundInRect:dirtyRect];
+	OakSidebarTreeView* tree = self.tree;
+	NSInteger row = [tree rowForView:self];
+	if(!tree || row < 0 || row >= tree.numberOfRows)
+		return;
+
+	CGFloat pixel = 1 / (self.window.backingScaleFactor ?: 1);
+	[[NSColor.secondaryLabelColor colorWithAlphaComponent:0.28] setFill];
+	for(id parent = [tree parentForItem:[tree itemAtRow:row]]; parent; parent = [tree parentForItem:parent])
+	{
+		NSInteger parentRow = [tree rowForItem:parent];
+		if(parentRow < 0)
+			break;
+		NSRect marker = [tree frameOfOutlineCellAtRow:parentRow];
+		if(!NSIsEmptyRect(marker))
+		{
+			CGFloat x = floor(NSMidX([tree convertRect:marker toView:self]) / pixel) * pixel;
+			NSRect guide = NSMakeRect(x, NSMinY(self.bounds), pixel, NSHeight(self.bounds));
+			NSRectFillUsingOperation(NSIntersectionRect(guide, dirtyRect), NSCompositingOperationSourceOver);
+		}
+	}
+}
+@end
+
+CGFloat const kOakSidebarDisclosureCenter = 15;
+
+NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat trailingPadding)
+{
+	NSImage* image = [NSImage imageWithSize:NSMakeSize(width + trailingPadding, 14) flipped:NO drawingHandler:^BOOL(NSRect rect){
+		CGFloat x = NSMinX(rect) + width / 2, y = NSMidY(rect);
+		NSBezierPath* chevron = [NSBezierPath bezierPath];
+		if(expanded)
+		{
+			[chevron moveToPoint:NSMakePoint(x - 3.5, y + 1.75)];
+			[chevron lineToPoint:NSMakePoint(x, y - 1.75)];
+			[chevron lineToPoint:NSMakePoint(x + 3.5, y + 1.75)];
+		}
+		else
+		{
+			[chevron moveToPoint:NSMakePoint(x - 1.75, y + 3.5)];
+			[chevron lineToPoint:NSMakePoint(x + 1.75, y)];
+			[chevron lineToPoint:NSMakePoint(x - 1.75, y - 3.5)];
+		}
+		chevron.lineWidth = 1.5;
+		chevron.lineCapStyle = NSLineCapStyleRound;
+		chevron.lineJoinStyle = NSLineJoinStyleRound;
+		[NSColor.blackColor setStroke];
+		[chevron stroke];
+		return YES;
+	}];
+	[image setTemplate:YES];
+	return image;
+}
+
+@implementation OakSidebarTreeView
+- (instancetype)initWithFrame:(NSRect)frame
+{
+	if(self = [super initWithFrame:frame])
+		self.indentationPerLevel = 12;
+	return self;
+}
+
+- (NSRect)frameOfOutlineCellAtRow:(NSInteger)row
+{
+	NSRect frame = [super frameOfOutlineCellAtRow:row];
+	if(!NSIsEmptyRect(frame))
+	{
+		CGFloat inset = kOakSidebarDisclosureCenter + [self levelForRow:row] * self.indentationPerLevel;
+		CGFloat center = self.userInterfaceLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft ? NSMaxX(self.bounds) - inset : NSMinX(self.bounds) + inset;
+		frame.origin.x = center - NSWidth(frame) / 2;
+	}
+	return frame;
+}
+
+- (NSView*)makeViewWithIdentifier:(NSUserInterfaceItemIdentifier)identifier owner:(id)owner
+{
+	NSView* view = [super makeViewWithIdentifier:identifier owner:owner];
+	if(![identifier isEqualToString:NSOutlineViewDisclosureButtonKey] || ![view isKindOfClass:NSButton.class])
+		return view;
+
+	static NSImage* const collapsed = OakSidebarDisclosureImage(NO, 12);
+	static NSImage* const expanded = OakSidebarDisclosureImage(YES, 12);
+	// Keep the native button's target and action; replace only its appearance.
+	NSButton* button = (NSButton*)view;
+	button.bordered = NO;
+	button.imagePosition = NSImageOnly;
+	button.imageScaling = NSImageScaleNone;
+	button.buttonType = NSButtonTypeToggle;
+	button.image = collapsed;
+	button.alternateImage = expanded;
+	return button;
+}
+
+- (NSTableRowView*)makeTreeRowView
+{
+	static NSString* const identifier = @"OakSidebarTreeRow";
+	OakSidebarTreeRowView* row = [self makeViewWithIdentifier:identifier owner:nil];
+	if(!row)
+	{
+		row = [[OakSidebarTreeRowView alloc] initWithFrame:NSZeroRect];
+		row.identifier = identifier;
+		row.tree = self;
+	}
+	return row;
+}
+@end
+
 // =========================
 // = OakBackgroundFillView =
 // =========================

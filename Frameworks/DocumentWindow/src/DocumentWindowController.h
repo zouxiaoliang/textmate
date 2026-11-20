@@ -21,6 +21,8 @@
 @property (nonatomic) id                                         fileBrowserHistory;
 @property (nonatomic) CGFloat                                    fileBrowserWidth;
 
+@property (nonatomic) BOOL                                       outlineVisible;
+
 @property (nonatomic) BOOL                                       htmlOutputVisible;
 @property (nonatomic) NSSize                                     htmlOutputSize;
 
@@ -52,6 +54,7 @@
 - (IBAction)moveFocus:(id)sender;
 
 - (IBAction)performCloseTab:(id)sender;
+- (IBAction)performCloseProject:(id)sender;
 - (IBAction)performCloseSplit:(id)sender;
 - (IBAction)performCloseWindow:(id)sender;
 - (IBAction)performCloseAllTabs:(id)sender;
@@ -76,6 +79,7 @@
 // = OakFileBrowser =
 // ==================
 
+- (IBAction)toggleOutline:(id)sender;
 - (IBAction)toggleFileBrowser:(id)sender;
 - (IBAction)revealFileInProject:(id)sender;
 - (IBAction)goToProjectFolder:(id)sender;

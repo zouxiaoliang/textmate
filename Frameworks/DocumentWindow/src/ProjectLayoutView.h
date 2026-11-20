@@ -2,11 +2,22 @@
 
 @interface ProjectLayoutView : NSView
 @property (nonatomic) NSView* documentView;
+@property (nonatomic) NSView* outlineView;
 @property (nonatomic) NSView* fileBrowserView;
+@property (nonatomic) NSView* fileBrowserActionsView;
 @property (nonatomic) NSView* htmlOutputView;
+
+@property (nonatomic) BOOL fileBrowserCollapsed;
+@property (nonatomic) BOOL outlineCollapsed;
+@property (nonatomic) CGFloat outlineHeight;
+@property (nonatomic, copy) void (^sidebarStateDidChange)(ProjectLayoutView* layoutView);
+@property (nonatomic, copy) void (^sidebarDidRequestClose)(void);
 
 @property (nonatomic) CGFloat fileBrowserWidth;
 @property (nonatomic) BOOL fileBrowserOnRight;
+@property (nonatomic, readonly) CGFloat visibleSidebarWidth;
+@property (nonatomic, readonly) CGFloat sidebarOpacity;
+- (void)setSidebarTransitionWidth:(CGFloat)width opacity:(CGFloat)opacity;
 
 @property (nonatomic) NSSize htmlOutputSize;
 @property (nonatomic) BOOL htmlOutputOnRight;

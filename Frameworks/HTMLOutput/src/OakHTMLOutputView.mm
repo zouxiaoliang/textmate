@@ -7,13 +7,14 @@
 #import "helpers/OakSystemCommandURLSchemeHandler.h"
 #import <OakFoundation/OakFoundation.h>
 #import <OakFoundation/NSString Additions.h>
+#import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/NSAlert Additions.h>
 #import <oak/debug.h>
 
 @interface HOStatusBar (BusyAndProgressProperties) <HOJSBridgeDelegate>
 @end
 
-@interface OakHTMLOutputView ()
+@interface OakHTMLOutputView () <OakUserDefaultsObserver>
 @property (nonatomic, getter = isRunningCommand, readwrite) BOOL runningCommand;
 @property (nonatomic) HOAutoScroll* autoScrollHelper;
 @property (nonatomic) std::map<std::string, std::string> environment;
@@ -32,8 +33,36 @@
 	if(self = [super initWithFrame:aRect])
 	{
 		_reusable = YES;
+		OakObserveUserDefaults(self);
 	}
 	return self;
+}
+
+- (void)updateMarkdownPreviewAppearance
+{
+	if(![self.commandIdentifier.UUIDString isEqualToString:@"B52DEA16-8480-11D9-BE59-000D93B3A10E"])
+		return;
+
+	static NSString* script;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		if(NSURL* url = [NSBundle.mainBundle URLForResource:@"MarkdownPreviewAppearance" withExtension:@"js"])
+			script = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
+	});
+	if(script)
+		[self.webView callAsyncJavaScript:script arguments:@{ @"dark": @(OakThemeAppearanceIsDark(self.effectiveAppearance)) }
+			inFrame:nil inContentWorld:WKContentWorld.defaultClientWorld completionHandler:nil];
+}
+
+- (void)userDefaultsDidChange:(NSNotification*)aNotification
+{
+	[self updateMarkdownPreviewAppearance];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+	[super viewDidChangeEffectiveAppearance];
+	[self updateMarkdownPreviewAppearance];
 }
 
 - (void)loadRequest:(NSURLRequest*)aRequest environment:(std::map<std::string, std::string> const&)anEnvironment autoScrolls:(BOOL)flag
@@ -187,6 +216,8 @@
 		self.pendingScrollPosition = nil;
 	}
 
+	if(webView == self.webView)
+		[self updateMarkdownPreviewAppearance];
 	[super webView:webView didFinishNavigation:navigation];
 }
 

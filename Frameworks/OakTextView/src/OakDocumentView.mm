@@ -579,9 +579,14 @@ static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
 	if(!doc || !doc.path || ![[LSPManager sharedManager] hasClientForDocument:doc])
 		return;
 
-	NSDictionary* params = @{ @"textDocument": @{ @"uri": [NSURL fileURLWithPath:doc.path].absoluteString } };
+	LSPManager* manager = LSPManager.sharedManager;
+	if(NSArray* cached = [manager cachedDocumentSymbolsForDocument:doc])
+	{
+		self.symbolChooser.lspSymbols = FlattenDocumentSymbols(cached);
+		return;
+	}
 	__weak OakDocumentView* weakSelf = self;
-	[[LSPManager sharedManager] requestLanguageQuery:@"textDocument/documentSymbol" forDocument:doc params:params completion:^(id raw, NSString* errorCode){
+	[manager requestDocumentSymbolsForDocument:doc completion:^(NSArray* raw){
 		dispatch_async(dispatch_get_main_queue(), ^{
 			OakDocumentView* strongSelf = weakSelf;
 			// Ignore the response when the chooser is no longer up for this document.
@@ -620,14 +625,58 @@ static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
 
 - (void)showSymbolSelector:(NSPopUpButton*)symbolPopUp
 {
+	OakDocument* document = self.document;
+	LSPManager* manager = LSPManager.sharedManager;
+	NSArray* cached = [manager cachedDocumentSymbolsForDocument:document];
+	BOOL needsRequest = !cached && document.path && [manager hasClientForDocument:document];
+	[self populateSymbolSelector:symbolPopUp withLSPResult:cached loading:needsRequest];
+	if(!needsRequest)
+		return;
+
+	// The sidebar can be hidden. Load on demand in that case, and ignore the
+	// callback if the menu was rebuilt or the user switched documents.
+	__weak OakDocumentView* weakSelf = self;
+	__weak NSPopUpButton* weakPopUp = symbolPopUp;
+	__weak NSMenuItem* firstItem = [symbolPopUp itemAtIndex:0];
+	[manager requestDocumentSymbolsForDocument:document completion:^(NSArray* raw){
+		OakDocumentView* editor = weakSelf;
+		NSPopUpButton* popUp = weakPopUp;
+		if(editor.document == document && popUp && firstItem && [popUp itemAtIndex:0] == firstItem)
+			[editor populateSymbolSelector:popUp withLSPResult:raw loading:NO];
+	}];
+}
+
+- (void)populateSymbolSelector:(NSPopUpButton*)symbolPopUp withLSPResult:(NSArray*)result loading:(BOOL)loading
+{
 	NSMenu* symbolMenu = symbolPopUp.menu;
 	[symbolMenu removeAllItems];
 
 	text::selection_t sel(to_s(_textView.selectionString));
 	text::pos_t caret = sel.last().max();
 
-	__block NSInteger index = 0;
-	[self.document enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
+	__block NSMenuItem* selected = nil;
+	__block text::pos_t selectedPosition;
+	void (^addSymbol)(text::pos_t const&, NSString*, NSUInteger) = ^(text::pos_t const& pos, NSString* name, NSUInteger depth){
+		NSMenuItem* item = [symbolMenu addItemWithTitle:name action:@selector(goToSymbol:) keyEquivalent:@""];
+		item.indentationLevel = MIN(depth, 15);
+		item.target = self;
+		item.representedObject = to_ns(pos);
+		if(pos <= caret && (!selected || selectedPosition <= pos))
+		{
+			selected = item;
+			selectedPosition = pos;
+		}
+	};
+	NSArray<NSDictionary*>* symbols = FlattenDocumentSymbols(result);
+	if(symbols.count)
+	{
+		for(NSDictionary* entry in symbols)
+		{
+			text::pos_t pos([entry[@"line"] unsignedIntegerValue], [entry[@"column"] unsignedIntegerValue]);
+			addSymbol(pos, entry[@"name"], [entry[@"depth"] unsignedIntegerValue]);
+		}
+	}
+	else [self.document enumerateSymbolsUsingBlock:^(text::pos_t const& pos, NSString* symbol){
 		if([symbol isEqualToString:@"-"])
 		{
 			[symbolMenu addItem:[NSMenuItem separatorItem]];
@@ -638,20 +687,14 @@ static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
 			while(indent < symbol.length && [symbol characterAtIndex:indent] == 0x2003) // Em-space
 				++indent;
 
-			NSMenuItem* item = [symbolMenu addItemWithTitle:[symbol substringFromIndex:indent] action:@selector(goToSymbol:) keyEquivalent:@""];
-			[item setIndentationLevel:indent];
-			[item setTarget:self];
-			[item setRepresentedObject:to_ns(pos)];
+			addSymbol(pos, [symbol substringFromIndex:indent], indent);
 		}
-
-		if(pos <= caret)
-			++index;
 	}];
 
 	if(symbolMenu.numberOfItems == 0)
-		[symbolMenu addItemWithTitle:@"No symbols to show for current document." action:@selector(nop:) keyEquivalent:@""];
+		[symbolMenu addItemWithTitle:loading ? @"Loading symbols…" : @"No symbols to show for current document." action:nil keyEquivalent:@""];
 
-	[symbolPopUp selectItemAtIndex:(index ? index-1 : 0)];
+	[symbolPopUp selectItem:selected ?: [symbolPopUp itemAtIndex:0]];
 }
 
 - (void)showBundlesMenu:(id)sender

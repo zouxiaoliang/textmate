@@ -17,6 +17,7 @@
 @property (nonatomic, readonly) NSArray<NSURL*>* selectedFileURLs;
 
 @property (nonatomic, readonly) NSView*          headerView;
+@property (nonatomic, readonly) NSView*          actionsView;
 @property (nonatomic, readonly) NSOutlineView*   outlineView;
 @property (nonatomic, readonly) id               sessionState;
 

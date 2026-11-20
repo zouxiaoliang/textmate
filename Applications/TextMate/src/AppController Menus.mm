@@ -6,6 +6,7 @@
 #import <command/parser.h>
 #import <cf/cf.h>
 #import <ns/ns.h>
+#import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/NSMenuItem Additions.h>
 #import <OakAppKit/OakToolTip.h>
 #import <MenuBuilder/MenuBuilder.h>
@@ -121,8 +122,7 @@ static NSString* NameForLocaleIdentifier (NSString* languageCode)
 	NSString* themeUUID = controller.textView.themeUUID;
 	if(!themeUUID.length)
 	{
-		NSString* appearance = [NSUserDefaults.standardUserDefaults stringForKey:@"themeAppearance"];
-		BOOL dark = [appearance isEqualToString:@"dark"] || (![appearance isEqualToString:@"light"] && [[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]] isEqualToString:NSAppearanceNameDarkAqua]);
+		BOOL dark = OakThemeAppearanceIsDark(NSApp.effectiveAppearance);
 		themeUUID = [NSUserDefaults.standardUserDefaults stringForKey:dark ? @"darkModeThemeUUID" : @"universalThemeUUID"];
 	}
 	NSURLComponents* selection = [NSURLComponents componentsWithString:@"textmate-theme-editor://theme/"];

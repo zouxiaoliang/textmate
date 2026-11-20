@@ -13,6 +13,13 @@ typedef NS_ENUM(NSUInteger, OakBackgroundFillViewStyle) {
 @property (nonatomic) BOOL active;
 @end
 
+extern CGFloat const kOakSidebarDisclosureCenter;
+NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat trailingPadding = 0);
+
+@interface OakSidebarTreeView : NSOutlineView
+- (NSTableRowView*)makeTreeRowView;
+@end
+
 NSFont* OakStatusBarFont ();
 NSFont* OakControlFont ();
 

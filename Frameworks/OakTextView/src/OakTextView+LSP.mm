@@ -133,64 +133,17 @@ static NSArray<NSDictionary*>* NormalizeLSPLocations (id raw)
 	return best;
 }
 
-// ============================
-// = Navigation History Jumps =
-// ============================
-
-- (text::range_t)currentNavigationSelection
-{
-	if(!documentView)
-		return text::range_t();
-	text::pos_t min = documentView->convert(documentView->ranges().last().min().index);
-	text::pos_t max = documentView->convert(documentView->ranges().last().max().index);
-	return text::range_t(min, max);
-}
-
 - (void)jumpToLSPLocation:(NSString*)uri line:(NSUInteger)line character:(NSUInteger)character
 {
 	NSString* filePath = [NSURL URLWithString:uri].path;
 	if(!filePath)
 		return;
 
-	if(documentView)
-		[OakNavigationHistory.sharedInstance recordLocationForDocument:self.document selection:[self currentNavigationSelection]];
+	[self recordNavigationLocation];
 
 	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:filePath];
 	text::range_t selection(text::pos_t(line, character));
 	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
-}
-
-- (void)navigateToPath:(NSString*)path selection:(text::range_t)selection
-{
-	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:path];
-	if(!targetDoc)
-	{
-		NSBeep();
-		return;
-	}
-	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
-}
-
-- (void)navigateBack:(id)sender
-{
-	if(!documentView)
-		return;
-
-	__weak OakTextView* weakSelf = self;
-	[OakNavigationHistory.sharedInstance goBackFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
-		[weakSelf navigateToPath:path selection:selection];
-	}];
-}
-
-- (void)navigateForward:(id)sender
-{
-	if(!documentView)
-		return;
-
-	__weak OakTextView* weakSelf = self;
-	[OakNavigationHistory.sharedInstance goForwardFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
-		[weakSelf navigateToPath:path selection:selection];
-	}];
 }
 
 // ============================
@@ -1035,6 +988,62 @@ static NSArray<NSDictionary*>* NormalizeLSPLocations (id raw)
 		NSDictionary* cmd = action[@"command"];
 		[lsp executeCommand:cmd[@"command"] arguments:cmd[@"arguments"] forDocument:doc completion:commandErrorHandler];
 	}
+}
+
+@end
+
+// ============================
+// = Navigation History Jumps =
+// ============================
+
+@implementation OakTextView (Navigation)
+
+- (text::range_t)currentNavigationSelection
+{
+	if(!documentView)
+		return text::range_t();
+	text::pos_t min = documentView->convert(documentView->ranges().last().min().index);
+	text::pos_t max = documentView->convert(documentView->ranges().last().max().index);
+	return text::range_t(min, max);
+}
+
+- (void)recordNavigationLocation
+{
+	if(documentView)
+		[OakNavigationHistory.sharedInstance recordLocationForDocument:self.document selection:[self currentNavigationSelection]];
+}
+
+- (void)navigateToPath:(NSString*)path selection:(text::range_t)selection
+{
+	OakDocument* targetDoc = [OakDocumentController.sharedInstance documentWithPath:path];
+	if(!targetDoc)
+	{
+		NSBeep();
+		return;
+	}
+	[OakDocumentController.sharedInstance showDocument:targetDoc andSelect:selection inProject:nil bringToFront:YES];
+}
+
+- (void)navigateBack:(id)sender
+{
+	if(!documentView)
+		return;
+
+	__weak OakTextView* weakSelf = self;
+	[OakNavigationHistory.sharedInstance goBackFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
+		[weakSelf navigateToPath:path selection:selection];
+	}];
+}
+
+- (void)navigateForward:(id)sender
+{
+	if(!documentView)
+		return;
+
+	__weak OakTextView* weakSelf = self;
+	[OakNavigationHistory.sharedInstance goForwardFromDocument:self.document selection:[self currentNavigationSelection] jump:^(NSString* path, text::range_t selection){
+		[weakSelf navigateToPath:path selection:selection];
+	}];
 }
 
 @end

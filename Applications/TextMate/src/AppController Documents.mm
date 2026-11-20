@@ -12,7 +12,9 @@
 @implementation AppController (Documents)
 - (void)newDocument:(id)sender
 {
-	[[DocumentWindowController new] showWindow:self];
+	DocumentWindowController* controller = [DocumentWindowController new];
+	[controller showWindow:self];
+	[controller newDocumentInTab:sender];
 }
 
 - (void)newFileBrowser:(id)sender
@@ -64,7 +66,7 @@
 {
 	if([NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsShowFavoritesInsteadOfUntitledKey])
 			[self openFavorites:self];
-	else	[self newDocument:self];
+	else	[[DocumentWindowController new] showWindow:self];
 	return YES;
 }
 

@@ -6,6 +6,7 @@
 #import <ns/ns.h>
 
 static NSString* const kMenuShortcutsDefaultsKey = @"MenuShortcuts";
+NSNotificationName const MenuShortcutsDidChangeNotification = @"MenuShortcutsDidChangeNotification";
 
 @interface MenuShortcut : NSObject
 @property (nonatomic) NSString* identifier;
@@ -89,6 +90,7 @@ static NSString* const kMenuShortcutsDefaultsKey = @"MenuShortcuts";
 		shortcut.eventString = self.overrides[shortcut.identifier] ?: shortcut.defaultEventString;
 		[self applyShortcut:shortcut];
 	}
+	[NSNotificationCenter.defaultCenter postNotificationName:MenuShortcutsDidChangeNotification object:nil];
 }
 
 - (void)applyShortcut:(MenuShortcut*)shortcut
@@ -124,6 +126,7 @@ static NSString* const kMenuShortcutsDefaultsKey = @"MenuShortcuts";
 		self.overrides[shortcut.identifier] = shortcut.eventString;
 	[NSUserDefaults.standardUserDefaults setObject:self.overrides forKey:kMenuShortcutsDefaultsKey];
 	[self applyShortcut:shortcut];
+	[NSNotificationCenter.defaultCenter postNotificationName:MenuShortcutsDidChangeNotification object:nil];
 }
 @end
 

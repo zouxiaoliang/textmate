@@ -198,9 +198,13 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	{
 		_fileBrowserView = [[FileBrowserView alloc] initWithFrame:NSZeroRect];
 
-		_currentLocationMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:@selector(takeURLFrom:) keyEquivalent:@""];
+		_currentLocationMenuItem = [[NSMenuItem alloc] initWithTitle:@"None" action:@selector(takeURLFrom:) keyEquivalent:@""];
 		_currentLocationMenuItem.target = self;
-		[_currentLocationMenuItem bind:NSTitleBinding toObject:self withKeyPath:@"fileItem.displayName" options:nil];
+		[_currentLocationMenuItem bind:NSTitleBinding toObject:self withKeyPath:@"fileItem.displayName" options:@{
+			NSNullPlaceholderBindingOption: @"None",
+			NSNoSelectionPlaceholderBindingOption: @"None",
+			NSNotApplicablePlaceholderBindingOption: @"None",
+		}];
 		[_currentLocationMenuItem bind:NSImageBinding toObject:self withKeyPath:@"fileReference.image" options:nil];
 
 		NSOutlineView* outlineView = _fileBrowserView.outlineView;
@@ -254,6 +258,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 }
 
 - (NSView*)headerView                { return self.fileBrowserView.headerView;              }
+- (NSView*)actionsView               { return self.fileBrowserView.actionsView;             }
 - (NSOutlineView*)outlineView        { return self.fileBrowserView.outlineView;             }
 - (NSString*)path                    { return self.URL.filePathURL.path;                    }
 - (NSArray<NSURL*>*)selectedFileURLs { return [[self.selectedItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"URL.isFileURL == YES"]] valueForKeyPath:@"URL"]; }
@@ -601,6 +606,16 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 {
 	[menu removeAllItems];
 	[self updateMenu:menu];
+	OFBActionsView* actions = self.fileBrowserView.actionsView;
+	if(menu == actions.actionsPopUpButton.menu)
+	{
+		[menu addItem:[NSMenuItem separatorItem]];
+		for(NSButton* button in @[ actions.reloadButton, actions.searchButton, actions.favoritesButton, actions.scmButton ])
+		{
+			NSMenuItem* item = [menu addItemWithTitle:button.toolTip action:button.action keyEquivalent:@""];
+			item.target = button.target;
+		}
+	}
 }
 
 // ==================
@@ -2089,6 +2104,11 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 // ===============================
 // = Table cell view constructor =
 // ===============================
+
+- (NSTableRowView*)outlineView:(NSOutlineView*)outlineView rowViewForItem:(id)item
+{
+	return [(OakSidebarTreeView*)outlineView makeTreeRowView];
+}
 
 - (NSView*)outlineView:(NSOutlineView*)outlineView viewForTableColumn:(NSTableColumn*)tableColumn item:(FileItem*)item
 {

@@ -119,10 +119,14 @@ file(GLOB _fw_res
   "${CMAKE_SOURCE_DIR}/Frameworks/FileBrowser/resources/*.png"
   "${CMAKE_SOURCE_DIR}/Frameworks/DocumentWindow/resources/*.png"
   "${CMAKE_SOURCE_DIR}/Frameworks/HTMLOutput/resources/*.html"
-  "${CMAKE_SOURCE_DIR}/Frameworks/HTMLOutput/resources/*.js"
   "${CMAKE_SOURCE_DIR}/Applications/textmate-mcp/resources/*.js"
   "${CMAKE_SOURCE_DIR}/Frameworks/scm/resources/*.xslt"
 )
+set(_markdown_preview_script "${CMAKE_SOURCE_DIR}/Frameworks/HTMLOutput/resources/MarkdownPreviewAppearance.js")
+list(APPEND _fw_res
+  "${CMAKE_SOURCE_DIR}/Frameworks/HTMLOutput/resources/HTMLOutputWKWebView.js"
+  "${_markdown_preview_script}")
+set_property(TARGET TextMate APPEND PROPERTY LINK_DEPENDS "${_markdown_preview_script}")
 target_sources(TextMate PRIVATE ${_fw_res})
 set_source_files_properties(${_fw_res} PROPERTIES
   MACOSX_PACKAGE_LOCATION Resources)

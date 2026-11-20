@@ -134,6 +134,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 				{ /* -------- */ },
 				{ @"Close",                   @selector(performClose:),             @"w"   },
 				{ @"Close Window",            @selector(performCloseWindow:),       @"W"   },
+				{ @"Close Project",           @selector(performCloseProject:)                },
 				{ @"Close All Tabs",          @selector(performCloseAllTabs:),      @"w", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption|NSEventModifierFlagControl },
 				{ @"Close Other Tabs",        @selector(performCloseOtherTabsXYZ:), @"w", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagControl },
 				{ @"Close Tabs to the Right", @selector(performCloseTabsToTheRight:)       },
@@ -246,6 +247,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 					}
 				},
 				{ @"Show File Browser",      @selector(toggleFileBrowser:),    @"d", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption|NSEventModifierFlagControl },
+				{ @"Show Outline",           @selector(toggleOutline:),         @"o", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption|NSEventModifierFlagControl },
 				{ @"Show Terminal Panel",    @selector(toggleTerminalPanel:),  @"`", .modifierFlags = NSEventModifierFlagControl },
 				{ @"Show Project Changes", @selector(showProjectChanges:) },
 				{ @"Terminal Panel Position", .submenu = {
@@ -634,7 +636,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 		if(showFavoritesInsteadPrefs)
 			[self openFavorites:self];
 		else if(!disableUntitledAtStartupPrefs)
-			[self newDocument:self];
+			[[DocumentWindowController new] showWindow:self];
 	}
 
 	[self userDefaultsDidChange:nil]; // setup mate/rmate server

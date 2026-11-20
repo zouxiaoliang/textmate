@@ -24,6 +24,10 @@ static void DisableImplicitAnimationForBlock (void(^handler)())
 
 static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabItem";
 static CGFloat const kTitleBarDragEdgeHeight = 12;
+static CGFloat const kLeadingButtonWidth = 30;
+static CGFloat const kLeadingButtonHeight = 24;
+static CGFloat const kLeadingButtonPadding = 6;
+static CGFloat const kCompactTabMinimumWidth = 56;
 static CGFloat const kTabDragDistance = 10;
 static CGFloat const kTabDragRailDistance = 40;
 
@@ -326,7 +330,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		[self addConstraints:_overflowButtonConstraints];
 
 		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:[overflow]|" options:0 metrics:nil views:views]];
-		// Center the title and close button vertically so a taller tab bar stays balanced.
+		// The window tabs fill the title bar, so their centers share its midline.
 		[NSLayoutConstraint activateConstraints:@[
 			[self.closeButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
 			[self.textField.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -919,6 +923,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		return;
 	NSColor* ink = [self titleBarInkColor];
 	_createNewTabButton.contentTintColor = ink;
+	for(NSButton* button in _leadingButtons)
+		button.contentTintColor = [ink colorWithAlphaComponent:0.65];
 	_collapsedTitleLabel.textColor = [ink colorWithAlphaComponent:0.88];
 	for(OakTabFrame* frame in _currentLayout)
 		[frame.tabItem.tabView updateLabelAppearance];
@@ -1775,6 +1781,22 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	[self updateToLayout:[self makeLayout]];
 }
 
+- (void)setLeadingButtons:(NSArray<NSButton*>*)buttons
+{
+	for(NSButton* button in _leadingButtons)
+		[button removeFromSuperview];
+	_leadingButtons = [buttons copy];
+	for(NSButton* button in _leadingButtons)
+		[self addSubview:button];
+	[self updateTitleBarAppearance];
+	[self updateToLayout:[self makeLayout]];
+}
+
+- (CGFloat)tabStartInset
+{
+	return MAX(0, self.leadingContentInset) + (_leadingButtons.count ? 2 * kLeadingButtonPadding + kLeadingButtonWidth * _leadingButtons.count : 0);
+}
+
 - (NSArray<OakTabFrame*>*)makeLayoutForTabItems:(NSArray<OakTabItem*>*)tabItems inRectOfWidth:(CGFloat)totalWidth
 {
 	if(self.isWindowTitleBar)
@@ -1791,7 +1813,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		if(desiredWidth <= totalWidth)
 			return compactLayout;
 	}
-	if(self.leadingContentInset <= 0)
+	if(self.tabStartInset <= 0)
 		totalWidth += 1; // The leftmost tab starts at -1 when there is no inset.
 
 	NSMutableArray<OakTabFrame*>* array = [NSMutableArray array];
@@ -1863,12 +1885,14 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		return @[];
 
 	static NSString* const firstTabIdentifier = [NSUUID UUID].UUIDString;
-	// Reserve leading traffic-light inset (Minimal) and trailing chrome so tabs
-	// cannot slide under the "+" button or status label.
-	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame) - MAX(0, self.leadingContentInset);
+	// Keep tabs clear of the traffic lights, controls, add button, and status label.
+	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame) - self.tabStartInset;
 	if(!_statusTextLabel.hidden)
 		visibleWidth -= NSWidth(_statusTextLabel.frame) + 16;
-	NSUInteger const countOfVisibleTabs = MIN(MAX(0, floor(visibleWidth / _minimumTabSize)), _tabItems.count);
+	// When the controls leave less than a normal tab width, keep the selected
+	// file reachable and let its title truncate.
+	NSUInteger minimumVisible = _leadingButtons.count && visibleWidth >= kCompactTabMinimumWidth ? 1 : 0;
+	NSUInteger const countOfVisibleTabs = MIN(MAX(minimumVisible, floor(visibleWidth / _minimumTabSize)), _tabItems.count);
 
 	NSMutableArray<OakTabItem*>* tabItems = [NSMutableArray array];
 	BOOL didIncludeSelected = [_tabItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"selected == YES"]].count == 0;
@@ -2002,8 +2026,17 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	}
 
 	NSRect createNewTabButtonFrame = _createNewTabButton.frame;
-	CGFloat y = NSMinY(self.bounds)+1, height = MAX(0, NSHeight(self.bounds)-1);
-	CGFloat leading = MAX(0, self.leadingContentInset);
+	CGFloat bottomInset = self.isWindowTitleBar ? 0 : 1;
+	CGFloat y = NSMinY(self.bounds) + bottomInset, height = MAX(0, NSHeight(self.bounds) - bottomInset);
+	CGFloat centerY = NSMidY(self.bounds);
+	CGFloat leading = self.tabStartInset;
+	CGFloat buttonX = MAX(0, self.leadingContentInset) + kLeadingButtonPadding;
+	CGFloat buttonHeight = MIN(kLeadingButtonHeight, NSHeight(self.bounds));
+	for(NSButton* button in _leadingButtons)
+	{
+		button.frame = NSMakeRect(buttonX, centerY - buttonHeight / 2, kLeadingButtonWidth, buttonHeight);
+		buttonX += kLeadingButtonWidth;
+	}
 
 	CGFloat x = (leading > 0) ? leading : -1;
 	for(OakTabFrame* tabFrame in _currentLayout)
@@ -2014,16 +2047,25 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		x += tabFrame.width;
 	}
 
-	_createNewTabButton.frame = { { x, round((height - NSHeight(createNewTabButtonFrame)) / 2) }, createNewTabButtonFrame.size };
+	CGFloat addButtonHeight = NSHeight(createNewTabButtonFrame);
+	_createNewTabButton.frame = { { x, self.isWindowTitleBar ? centerY - addButtonHeight / 2 : round((height - addButtonHeight) / 2) }, createNewTabButtonFrame.size };
 	if(!_statusTextLabel.hidden)
-		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - NSWidth(_statusTextLabel.frame), round((NSHeight(self.bounds) - NSHeight(_statusTextLabel.frame)) / 2), NSWidth(_statusTextLabel.frame), NSHeight(_statusTextLabel.frame));
+	{
+		NSSize size = _statusTextLabel.frame.size;
+		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - size.width, centerY - size.height / 2, size.width, size.height);
+	}
 	BOOL collapsed = _collapsedTitle && !_dragging;
 	_createNewTabButton.hidden = collapsed;
 	_collapsedTitleLabel.hidden = !collapsed;
 	if(collapsed)
 	{
-		CGFloat margin = MAX(leading, _statusTextLabel.hidden ? 0 : NSWidth(_statusTextLabel.frame) + 16);
-		_collapsedTitleLabel.frame = NSMakeRect(margin, floor((NSHeight(self.bounds) - 17) / 2), MAX(0, NSWidth(self.bounds) - 2 * margin), 17);
+		CGFloat trailing = _statusTextLabel.hidden ? 0 : NSWidth(_statusTextLabel.frame) + 16;
+		CGFloat margin = MAX(leading, trailing);
+		CGFloat width = NSWidth(self.bounds);
+		if(width - 2 * margin >= _collapsedTitleLabel.intrinsicContentSize.width)
+			leading = trailing = margin;
+		CGFloat titleHeight = _collapsedTitleLabel.intrinsicContentSize.height;
+		_collapsedTitleLabel.frame = NSMakeRect(leading, centerY - titleHeight / 2, MAX(0, width - leading - trailing), titleHeight);
 	}
 
 	NSView* above = nil;

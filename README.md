@@ -141,6 +141,8 @@ Opening a file selects its syntax from the first line or filename extension. The
 
 Choose **View → Theme → Open Theme Editor…** or run `tm-theme-editor` to open the native macOS theme editor bundled with TextMate. Its three panes show the installed themes, color and font controls, and a live preview using TextMate's own editor, syntax highlighting, gutter, and selection rendering.
 
+Markdown Preview follows the Light, Dark, or Auto appearance selected in **View → Theme**. The Markdown source editor uses the selected editor theme, including any colors that theme defines for Markdown syntax.
+
 Select a theme to edit its global style or individual syntax scope rules. Use **+** for a blank theme, right-click a theme for **Duplicate**, **Delete**, or **Export…**, and use **Save Theme** (**Cmd+S**) to write changes. **File → Export Theme…** exports the current draft to a local `.tmTheme` file with a fresh UUID, preserving other metadata. Edits to bundled themes are stored as local overrides; new themes appear in TextMate's theme menu. Unsaved changes remain private to the preview, and switching themes or quitting offers **Save**, **Cancel**, and **Revert Changes**.
 
 The executable lives at `TextMate.app/Contents/MacOS/tm-theme-editor`. For a development build, run:
@@ -152,6 +154,10 @@ build-debug/Applications/TextMate/TextMate.app/Contents/MacOS/tm-theme-editor
 To run it by name, add the app's `Contents/MacOS` directory to your shell's `PATH`, or create a symlink to the executable in a directory already on your `PATH`.
 
 See [Theme Editor](docs/theme-editor.md) for editing and storage details.
+
+## Project Sidebar
+
+Use **View → Show File Browser** and **View → Show Outline** to show the Project and Outline sections in one sidebar. Click either section title to collapse or expand it. With both sections expanded, drag the line above Outline to adjust its height. The sidebar defaults to the left; move it in **Settings → Projects** or drag its outer edge to adjust its width.
 
 ## Project Changes
 

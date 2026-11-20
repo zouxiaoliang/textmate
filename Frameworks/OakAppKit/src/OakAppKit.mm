@@ -28,6 +28,16 @@ BOOL OakIsAlternateKeyOrMouseEvent (NSUInteger flags, NSEvent* anEvent)
 	return ([anEvent type] == NSEventTypeLeftMouseUp || [anEvent type] == NSEventTypeOtherMouseUp || [anEvent type] == NSEventTypeKeyDown) && (([anEvent modifierFlags] & flags) == flags);
 }
 
+BOOL OakThemeAppearanceIsDark (NSAppearance* effectiveAppearance)
+{
+	NSString* appearance = [NSUserDefaults.standardUserDefaults stringForKey:@"themeAppearance"];
+	if([appearance isEqualToString:@"dark"])
+		return YES;
+	if([appearance isEqualToString:@"light"])
+		return NO;
+	return [[effectiveAppearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]] isEqualToString:NSAppearanceNameDarkAqua];
+}
+
 // ======================
 // = TableView Movement =
 // ======================

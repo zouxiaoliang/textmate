@@ -472,8 +472,6 @@ struct diagnostic_banner_t
 - (IBAction)lspGoToTypeDefinition:(id)sender;
 - (IBAction)lspGoToImplementation:(id)sender;
 - (IBAction)lspShowWorkspaceSymbols:(id)sender;
-- (IBAction)navigateBack:(id)sender;
-- (IBAction)navigateForward:(id)sender;
 @end
 
 @interface OakTextView (Formatting)

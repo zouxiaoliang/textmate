@@ -20,9 +20,10 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 @property (nonatomic) NSColor* titleBarBackgroundColor;
 
 // iTerm2 Minimal: reserve leading space for floating traffic lights so
-// tabs begin to their right; the inset strip stays part of the bar and
-// participates in window dragging.
+// controls and tabs begin to their right; the inset strip stays part of the
+// bar and participates in window dragging.
 @property (nonatomic) CGFloat leadingContentInset;
+@property (nonatomic, copy) NSArray<NSButton*>* leadingButtons;
 
 // A short status message shown in the bar's trailing edge, e.g. the terminal's
 // unseen state; nil (or empty) hides it again.

@@ -11,6 +11,7 @@
 - (void)lspClientDidTerminate:(LSPClient*)client;
 - (void)lspClient:(LSPClient*)client didReceiveApplyEditRequest:(NSDictionary*)workspaceEdit requestId:(id)requestId;
 - (void)lspClientDidInitialize:(LSPClient*)client;
+- (void)lspClient:(LSPClient*)client didOpenDocument:(OakDocument*)document;
 - (id)lspClient:(LSPClient*)client handleServerRequest:(NSString*)method params:(NSDictionary*)params;
 - (void)lspClient:(LSPClient*)client didReceiveNotification:(NSString*)method params:(NSDictionary*)params;
 - (void)lspClient:(LSPClient*)client didRequestShowDocument:(NSString*)path takeFocus:(BOOL)takeFocus;

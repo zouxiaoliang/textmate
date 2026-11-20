@@ -45,8 +45,8 @@
 - (void)loadView
 {
 	NSButton* restoreDocumentsCheckBox       = OakCreateCheckBox(@"Open documents from last session");
-	NSButton* createAtStartupCheckBox        = OakCreateCheckBox(@"Create one at startup");
-	NSButton* createOnActivationCheckBox     = OakCreateCheckBox(@"Create one when re-activated");
+	NSButton* createAtStartupCheckBox        = OakCreateCheckBox(@"Open an empty window at startup");
+	NSButton* createOnActivationCheckBox     = OakCreateCheckBox(@"Open an empty window when re-activated");
 	NSPopUpButton* newDocumentTypesPopUp     = OakCreatePopUpButton();
 	NSPopUpButton* unknownDocumentTypesPopUp = OakCreatePopUpButton();
 	OakEncodingPopUpButton* encodingPopUp    = [[OakEncodingPopUpButton alloc] init];

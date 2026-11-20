@@ -92,8 +92,9 @@ static void* kObjectValueURLObserverContext = &kObjectValueURLObserverContext;
 		[_openButton.widthAnchor  constraintEqualToConstant:16].active = YES;
 		[_openButton.heightAnchor constraintEqualToConstant:16].active = YES;
 
-		NSTextField* textField = OakCreateLabel(@"", [NSFont controlContentFontOfSize:0]);
+		NSTextField* textField = OakCreateLabel();
 		textField.cell = [[FileItemSelectBasenameCell alloc] initTextCell:@""];
+		textField.font = [NSFont systemFontOfSize:12];
 		[textField.cell setWraps:NO];
 		[textField.cell setLineBreakMode:NSLineBreakByTruncatingMiddle];
 		textField.formatter = [[FileItemFormatter alloc] initWithTableCellView:self];
@@ -107,12 +108,13 @@ static void* kObjectValueURLObserverContext = &kObjectValueURLObserverContext;
 			_openButton, textField, _finderTagsView, _closeButton
 		]];
 		stackView.spacing = 4;
+		[stackView setCustomSpacing:2 afterView:_openButton];
 
 		[self addSubview:stackView];
 
 		[textField setContentHuggingPriority:NSLayoutPriorityDefaultLow-1 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-		[stackView.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor  constant: 4].active = YES;
+		[stackView.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor].active = YES;
 		[stackView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8].active = YES;
 		[stackView.topAnchor      constraintEqualToAnchor:self.topAnchor      constant: 0].active = YES;
 		[stackView.bottomAnchor   constraintEqualToAnchor:self.bottomAnchor   constant: 0].active = YES;

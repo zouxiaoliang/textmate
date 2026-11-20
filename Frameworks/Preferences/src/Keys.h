@@ -33,6 +33,10 @@ extern NSString* const kUserDefaultsDisableTabReorderingKey;
 extern NSString* const kUserDefaultsDisableTabAutoCloseKey;
 extern NSString* const kUserDefaultsDisableTabBarCollapsingKey;
 extern NSString* const kUserDefaultsHideTabsInFullScreenKey;
+extern NSString* const kUserDefaultsTitleBarHeightKey;
+extern NSInteger const kMinimumTitleBarHeight;
+extern NSInteger const kMaximumTitleBarHeight;
+NSInteger NormalizeTitleBarHeight (NSInteger height); // zero uses the system height
 
 // ===========
 // = Bundles =

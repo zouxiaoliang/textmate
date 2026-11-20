@@ -3,6 +3,14 @@
 #import <OakAppKit/OakUIConstructionFunctions.h>
 #import <OakAppKit/NSImage Additions.h>
 
+static CGFloat const kActionWidth = 19;
+static CGFloat const kMenuWidth = 30;
+static CGFloat const kActionSpacing = 2;
+
+@interface OFBActionsView ()
+@property (nonatomic) NSArray<NSButton*>* toolbarButtons;
+@end
+
 static NSButton* OakCreateImageButton (NSImage* image)
 {
 	NSButton* res = [NSButton new];
@@ -18,11 +26,6 @@ static NSButton* OakCreateImageButton (NSImage* image)
 {
 	if(self = [super initWithFrame:aRect])
 	{
-		self.wantsLayer   = YES;
-		self.material     = NSVisualEffectMaterialTitlebar;
-		self.blendingMode = NSVisualEffectBlendingModeWithinWindow;
-		self.state        = NSVisualEffectStateFollowsWindowActiveState;
-
 		self.createButton       = OakCreateImageButton([NSImage imageNamed:NSImageNameAddTemplate]);
 		self.actionsPopUpButton = OakCreateActionPopUpButton();
 		self.reloadButton       = OakCreateImageButton([NSImage imageNamed:NSImageNameRefreshTemplate]);
@@ -42,31 +45,53 @@ static NSButton* OakCreateImageButton (NSImage* image)
 		self.favoritesButton.image.accessibilityDescription = self.favoritesButton.toolTip;
 		self.scmButton.image.accessibilityDescription       = self.scmButton.toolTip;
 
-		NSView* wrappedActionsPopUpButton = [NSView new];
-		OakAddAutoLayoutViewsToSuperview(@[ self.actionsPopUpButton ], wrappedActionsPopUpButton);
-		[wrappedActionsPopUpButton addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:[popup]|" options:0 metrics:nil views:@{ @"popup": self.actionsPopUpButton }]];
-		[wrappedActionsPopUpButton addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[popup]|" options:0 metrics:nil views:@{ @"popup": self.actionsPopUpButton }]];
-
-		NSView* topDivider = OakCreateNSBoxSeparator();
-
-		NSDictionary* views = @{
-			@"topDivider": topDivider,
-			@"create":     self.createButton,
-			@"divider":    OakCreateNSBoxSeparator(),
-			@"actions":    wrappedActionsPopUpButton,
-			@"reload":     self.reloadButton,
-			@"search":     self.searchButton,
-			@"favorites":  self.favoritesButton,
-			@"scm":        self.scmButton,
-		};
-
-		OakAddAutoLayoutViewsToSuperview([views allValues], self);
-		OakSetupKeyViewLoop(@[ self, _createButton, _actionsPopUpButton, _reloadButton, _searchButton, _favoritesButton, _scmButton ]);
-
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-8-[create]-8-[divider(==1)]-8-[actions(==31)]-(>=8)-[reload]-4-[search]-4-[favorites]-4-[scm]-(12)-|" options:NSLayoutFormatAlignAllCenterY metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[topDivider]|"                                                                                         options:0 metrics:nil views:views]];
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[topDivider(==1)]-4-[divider(==15)]-5-|"                                                                     options:0 metrics:nil views:views]];
+		NSPopUpButtonCell* actionsCell = (NSPopUpButtonCell*)_actionsPopUpButton.cell;
+		actionsCell.arrowPosition = NSPopUpNoArrow;
+		actionsCell.imagePosition = NSImageOnly;
+		actionsCell.menuItem.image = [[NSImage imageWithSystemSymbolName:@"ellipsis" accessibilityDescription:nil]
+			imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]];
+		self.actionsPopUpButton.toolTip = @"Project Actions";
+		self.actionsPopUpButton.accessibilityLabel = self.actionsPopUpButton.toolTip;
+		_toolbarButtons = @[ _createButton, _reloadButton, _searchButton, _favoritesButton, _scmButton ];
+		NSArray<NSButton*>* buttons = [_toolbarButtons arrayByAddingObject:_actionsPopUpButton];
+		for(NSButton* button in buttons)
+			[self addSubview:button];
+		[self setContentCompressionResistancePriority:NSLayoutPriorityDragThatCannotResizeWindow - 2 forOrientation:NSLayoutConstraintOrientationHorizontal];
+		[self setContentHuggingPriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationHorizontal];
+		[self.widthAnchor constraintGreaterThanOrEqualToConstant:kMenuWidth].active = YES;
+		OakSetupKeyViewLoop([@[ self ] arrayByAddingObjectsFromArray:buttons]);
 	}
 	return self;
+}
+
+- (NSSize)intrinsicContentSize
+{
+	return NSMakeSize(kMenuWidth + self.toolbarButtons.count * (kActionWidth + kActionSpacing), 22);
+}
+
+- (void)resizeSubviewsWithOldSize:(NSSize)oldSize
+{
+	[self setNeedsLayout:YES];
+}
+
+- (void)layout
+{
+	[super layout];
+	CGFloat width = NSWidth(self.bounds);
+	CGFloat buttonSpacing = kActionWidth + kActionSpacing;
+	NSUInteger buttonCount = MIN(self.toolbarButtons.count, (NSUInteger)MAX(0, floor((width - kMenuWidth) / buttonSpacing)));
+	CGFloat offset = width - kMenuWidth - buttonCount * buttonSpacing;
+	BOOL rightToLeft = self.userInterfaceLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft;
+	NSUInteger index = 0;
+	for(NSButton* button in self.toolbarButtons)
+	{
+		button.hidden = index++ >= buttonCount;
+		if(!button.hidden)
+		{
+			button.frame = NSMakeRect(rightToLeft ? width - offset - kActionWidth : offset, 0, kActionWidth, NSHeight(self.bounds));
+			offset += buttonSpacing;
+		}
+	}
+	self.actionsPopUpButton.frame = NSMakeRect(rightToLeft ? 0 : width - kMenuWidth, 0, kMenuWidth, NSHeight(self.bounds));
 }
 @end

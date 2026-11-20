@@ -1,5 +1,7 @@
 #import "OakNavigationHistory.h"
 
+NSNotificationName const OakNavigationHistoryDidChangeNotification = @"OakNavigationHistoryDidChangeNotification";
+
 static NSUInteger const kNavigationHistoryLimit = 100;
 
 @implementation OakNavigationEntry
@@ -68,6 +70,7 @@ static NSUInteger const kNavigationHistoryLimit = 100;
 	if(_backStack.count > kNavigationHistoryLimit)
 		[_backStack removeObjectAtIndex:0];
 	[_forwardStack removeAllObjects];
+	[self notifyChange];
 }
 
 - (BOOL)goBackFromDocument:(OakDocument*)document selection:(text::range_t)selection jump:(void(^)(NSString* path, text::range_t selection))jump
@@ -84,6 +87,7 @@ static NSUInteger const kNavigationHistoryLimit = 100;
 
 	OakNavigationEntry* target = _backStack.lastObject;
 	[_backStack removeLastObject];
+	[self notifyChange];
 	jump(target.path, target.selection);
 	return YES;
 }
@@ -102,10 +106,16 @@ static NSUInteger const kNavigationHistoryLimit = 100;
 
 	OakNavigationEntry* target = _forwardStack.lastObject;
 	[_forwardStack removeLastObject];
+	[self notifyChange];
 	jump(target.path, target.selection);
 	return YES;
 }
 
 - (BOOL)canGoBack    { return _backStack.count != 0;    }
 - (BOOL)canGoForward { return _forwardStack.count != 0; }
+
+- (void)notifyChange
+{
+	[NSNotificationCenter.defaultCenter postNotificationName:OakNavigationHistoryDidChangeNotification object:self];
+}
 @end

@@ -5,6 +5,7 @@
 
 extern NSString* const LSPDiagnosticsDidChangeNotification;
 extern NSString* const LSPServerStatusDidChangeNotification;
+extern NSString* const LSPDocumentDidOpenNotification; // object: the document sent to its server
 
 @interface LSPManager : NSObject
 + (instancetype)sharedManager;
@@ -37,6 +38,10 @@ extern NSString* const LSPServerStatusDidChangeNotification;
 // Read-only, capability-checked requests on an existing server. Nil is a
 // request failure; NSNull is a successful empty response. Never starts a server.
 - (dispatch_block_t)requestLanguageQuery:(NSString*)method forDocument:(OakDocument*)document params:(NSDictionary*)params completion:(void(^)(id result, NSString* errorCode))callback;
+// Document symbol results shared by the Outline, status menu and symbol chooser.
+// Nil means unavailable; an empty array means the server reported no symbols.
+- (NSArray*)cachedDocumentSymbolsForDocument:(OakDocument*)document;
+- (dispatch_block_t)requestDocumentSymbolsForDocument:(OakDocument*)document completion:(void(^)(NSArray* symbols))callback;
 - (BOOL)hasClientForDocument:(OakDocument*)document;
 - (NSDictionary<NSString*, NSNumber*>*)diagnosticCountsForDocument:(OakDocument*)document;
 - (NSArray<NSDictionary*>*)diagnosticsForDocument:(OakDocument*)document;

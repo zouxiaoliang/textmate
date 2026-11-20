@@ -87,3 +87,9 @@ enum OTVFontSmoothing : NSUInteger
 - (void)updateEnvironment:(std::map<std::string, std::string>&)res;
 
 @end
+
+@interface OakTextView (Navigation)
+- (void)recordNavigationLocation;
+- (IBAction)navigateBack:(id)sender;
+- (IBAction)navigateForward:(id)sender;
+@end
