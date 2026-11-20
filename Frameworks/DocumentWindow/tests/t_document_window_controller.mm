@@ -15,7 +15,9 @@
 #import <Preferences/ShortcutsPreferences.h>
 #import <document/OakDocument.h>
 #import <document/OakDocumentController.h>
+#import <kvdb/kvdb.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 extern "C" NSRect SidebarExpandedFrame (NSRect frame, NSRect screen, CGFloat sidebarWidth, CGFloat editorWidth, BOOL onRight);
 
@@ -423,6 +425,106 @@ void test_opening_project_folder_starts_with_no_tabs ()
 		OAK_ASSERT([((EmptyWorkspaceView*)[controller valueForKey:@"emptyStateView"]).heading.stringValue isEqualToString:@"No open tabs"]);
 		[controller close];
 		[NSFileManager.defaultManager removeItemAtURL:directory error:nil];
+		[DocumentWindowController enableSessionSave];
+	});
+}
+
+void test_switching_projects_in_same_window_restores_each_projects_tabs ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+		id restorePreference = [defaults objectForKey:kUserDefaultsDisableFolderStateRestore];
+		[defaults setBool:NO forKey:kUserDefaultsDisableFolderStateRestore];
+		NSURL* root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+		NSURL* first = [root URLByAppendingPathComponent:@"Project A" isDirectory:YES];
+		NSURL* second = [root URLByAppendingPathComponent:@"Project B" isDirectory:YES];
+		NSFileManager* files = NSFileManager.defaultManager;
+		OAK_ASSERT([files createDirectoryAtURL:first withIntermediateDirectories:YES attributes:nil error:nil]);
+		OAK_ASSERT([files createDirectoryAtURL:second withIntermediateDirectories:NO attributes:nil error:nil]);
+		KVDB* projectDB = [[KVDB alloc] initWithSQLFile:@"Projects.db" inDirectory:root.path];
+		Method databaseMethod = class_getClassMethod(DocumentWindowController.class, @selector(sharedProjectStateDB));
+		IMP testDatabase = imp_implementationWithBlock(^KVDB*(id){ return projectDB; });
+		IMP originalDatabase = method_setImplementation(databaseMethod, testDatabase);
+		NSURL* one = [first URLByAppendingPathComponent:@"one.txt"];
+		NSURL* two = [first URLByAppendingPathComponent:@"two.txt"];
+		NSURL* three = [second URLByAppendingPathComponent:@"three.txt"];
+		for(NSURL* file in @[ one, two, three ])
+			OAK_ASSERT([@"saved content\n" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+		DocumentWindowController* controller = [DocumentWindowController new];
+		[controller showWindow:nil];
+		NSWindow* window = controller.window;
+		OakDocumentController* documents = OakDocumentController.sharedInstance;
+		[documents showFileBrowserAtPath:first.path];
+		auto waitForTab = ^(NSURL* url){
+			NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+			while(![controller.selectedDocument.path isEqualToString:url.path] && deadline.timeIntervalSinceNow > 0)
+				[NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+			OAK_ASSERT([controller.selectedDocument.path isEqualToString:url.path]);
+		};
+		auto openTab = ^(NSURL* url){
+			[documents showDocument:[documents documentWithPath:url.path] inProject:controller.identifier bringToFront:YES];
+			waitForTab(url);
+		};
+		auto switchProject = ^(NSURL* url){
+			__block BOOL prompted = NO;
+			NSTimer* chooseCurrentWindow = [NSTimer timerWithTimeInterval:0.01 repeats:YES block:^(NSTimer* timer){
+				if(NSApp.modalWindow)
+				{
+					prompted = YES;
+					[NSApp stopModalWithCode:NSAlertFirstButtonReturn];
+				}
+			}];
+			[NSRunLoop.currentRunLoop addTimer:chooseCurrentWindow forMode:NSModalPanelRunLoopMode];
+			[documents showFileBrowserAtPath:url.path];
+			[chooseCurrentWindow invalidate];
+			OAK_ASSERT(prompted && controller.window == window && window.isVisible);
+		};
+
+		openTab(one);
+		openTab(two);
+
+		switchProject(second);
+		OAK_ASSERT([controller.defaultProjectPath.lastPathComponent isEqualToString:@"Project B"]);
+		OAK_ASSERT(controller.documents.count == 0 && controller.selectedDocument == nil);
+		openTab(three);
+
+		switchProject(first);
+		waitForTab(two);
+		OAK_ASSERT([[controller.documents valueForKey:@"path"] isEqualToArray:(@[ one.path, two.path ])]);
+		switchProject(second);
+		waitForTab(three);
+		OAK_ASSERT(controller.documents.count == 1);
+
+		OakDocument* edited = controller.selectedDocument;
+		[edited beginUndoGrouping];
+		edited.content = @"unsaved content\n";
+		[edited endUndoGrouping];
+		OAK_ASSERT(edited.isDocumentEdited);
+		__block NSArray* documentsAskedToSave;
+		Method warningMethod = class_getInstanceMethod(DocumentWindowController.class, @selector(showCloseWarningUIForDocuments:completionHandler:));
+		IMP cancelWarning = imp_implementationWithBlock(^(id, NSArray* documents, void(^completion)(BOOL)){
+			documentsAskedToSave = documents;
+			completion(NO);
+		});
+		IMP originalWarning = method_setImplementation(warningMethod, cancelWarning);
+		switchProject(first);
+		method_setImplementation(warningMethod, originalWarning);
+		imp_removeBlock(cancelWarning);
+		OAK_ASSERT([controller.defaultProjectPath.lastPathComponent isEqualToString:@"Project B"]);
+		OAK_ASSERT(controller.selectedDocument == edited && [edited.content isEqualToString:@"unsaved content\n"]);
+		OAK_ASSERT([documentsAskedToSave isEqualToArray:@[ edited ]]);
+
+		[controller close];
+		method_setImplementation(databaseMethod, originalDatabase);
+		imp_removeBlock(testDatabase);
+		[files removeItemAtURL:root error:nil];
+		if(restorePreference)
+			[defaults setObject:restorePreference forKey:kUserDefaultsDisableFolderStateRestore];
+		else
+			[defaults removeObjectForKey:kUserDefaultsDisableFolderStateRestore];
 		[DocumentWindowController enableSessionSave];
 	});
 }

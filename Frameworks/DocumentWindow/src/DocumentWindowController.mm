@@ -1158,6 +1158,16 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[self closeTabsAtIndexes:[NSIndexSet indexSetWithIndex:index] askToSaveChanges:YES activate:YES];
 }
 
+- (void)clearProjectContents
+{
+	++self.editorNavigationGeneration;
+	self.documents = @[];
+	self.selectedTabIndex = NSNotFound;
+	[_stickyDocumentIdentifiers removeAllObjects];
+	self.terminalPanelController.panelVisible = NO;
+	[self.terminalPanelController stopTerminal];
+}
+
 - (void)closeProjectAfterConfirmation
 {
 	BOOL showFileBrowser = self.fileBrowserVisible;
@@ -1165,8 +1175,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	BOOL disableResize = self.disableFileBrowserWindowResize;
 	self.disableFileBrowserWindowResize = YES;
 	[self saveProjectState];
-	self.documents = @[];
-	self.selectedTabIndex = NSNotFound;
+	[self clearProjectContents];
 	self.defaultProjectPath = nil;
 	self.fileBrowserVisible = NO;
 	self.outlineVisible = NO;
@@ -1174,8 +1183,6 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.fileBrowser = nil;
 	self.fileBrowserHistory = nil;
 	self.layoutView.fileBrowserActionsView = nil;
-	self.terminalPanelController.panelVisible = NO;
-	[self.terminalPanelController stopTerminal];
 	self.projectPath = nil;
 	self.documentPath = nil;
 	self.fileBrowserVisible = showFileBrowser;
@@ -1185,16 +1192,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[self updateWindowTitle];
 }
 
-- (IBAction)performCloseProject:(id)sender
+- (void)confirmProjectCloseWithCompletionHandler:(void(^)(void))completion
 {
-	if(!self.projectPath && !self.defaultProjectPath)
-		return;
-
 	NSArray<OakDocument*>* documentsToSave = [_documents filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"isDocumentEdited == YES"]];
 	void (^confirmTerminalAndClose)(void) = ^{
 		[self.terminalPanelController confirmTerminalCloseInWindow:self.window completionHandler:^(BOOL canClose){
 			if(canClose)
-				[self closeProjectAfterConfirmation];
+				completion();
 		}];
 	};
 	if(documentsToSave.count)
@@ -1204,6 +1208,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		}];
 	else
 		confirmTerminalAndClose();
+}
+
+- (IBAction)performCloseProject:(id)sender
+{
+	if(self.projectPath || self.defaultProjectPath)
+		[self confirmProjectCloseWithCompletionHandler:^{ [self closeProjectAfterConfirmation]; }];
 }
 
 - (IBAction)performCloseSplit:(id)sender
@@ -1250,10 +1260,18 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self closeTabsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, _selectedTabIndex)] askToSaveChanges:YES activate:YES];
 }
 
+- (void)saveProjectStateForPath:(NSString*)path
+{
+	NSString* folder = to_ns(path::resolve(to_s(path)));
+	NSMutableDictionary* project = [[self sessionInfoIncludingUntitledDocuments:NO] mutableCopy];
+	project[@"projectPath"] = folder;
+	[[self.class sharedProjectStateDB] setValue:project forKey:folder];
+}
+
 - (void)saveProjectState
 {
-	if(self.treatAsProjectWindow)
-		[[DocumentWindowController sharedProjectStateDB] setValue:[self sessionInfoIncludingUntitledDocuments:NO] forKey:self.projectPath];
+	if(self.defaultProjectPath || self.treatAsProjectWindow)
+		[self saveProjectStateForPath:self.defaultProjectPath ?: self.projectPath];
 }
 
 - (BOOL)windowShouldClose:(id)sender
@@ -1747,6 +1765,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 - (void)openAndSelectDocument:(OakDocument*)document activate:(BOOL)activateFlag
 {
 	[document loadModalForWindow:self.window completionHandler:^(OakDocumentIOResult result, NSString* errorMessage, oak::uuid_t const& filterUUID){
+		if(![self.documents containsObject:document])
+		{
+			if(result == OakDocumentIOResultSuccess)
+				[document close];
+			return;
+		}
 		if(result == OakDocumentIOResultSuccess)
 		{
 			BOOL showBundleSuggestions = ![NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableBundleSuggestionsKey];
@@ -3908,6 +3932,59 @@ static NSUInteger DisableSessionSavingCount = 0;
 	}
 }
 
+- (void)openProjectAtPath:(NSString*)folder replacingProjectAtPath:(NSString*)previousFolder
+{
+	BOOL disposable = self.documents.count == 1 && is_disposable(self.selectedDocument);
+	BOOL shouldRestore = previousFolder || self.documents.count == 0 || disposable;
+	NSDictionary* project;
+	if(shouldRestore && ![NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableFolderStateRestore])
+		project = [[self.class sharedProjectStateDB] valueForKey:folder];
+
+	BOOL disableResize = self.disableFileBrowserWindowResize;
+	if(previousFolder)
+	{
+		[self saveProjectStateForPath:previousFolder];
+		self.disableFileBrowserWindowResize = YES;
+		[self clearProjectContents];
+		if(!project)
+		{
+			project = @{
+				@"fileBrowserVisible": @YES,
+				@"fileBrowserCollapsed": @(self.layoutView.fileBrowserCollapsed),
+				@"outlineVisible": @(self.outlineVisible),
+				@"outlineCollapsed": @(self.layoutView.outlineCollapsed),
+				@"outlineHeight": @(self.layoutView.outlineHeight),
+			};
+		}
+	}
+	else if(disposable)
+	{
+		self.selectedDocument.customName = @"not untitled"; // Release the untitled name before restoring tabs.
+	}
+
+	if(project)
+	{
+		NSMutableDictionary* state = [project mutableCopy];
+		state[@"projectPath"] = folder;
+		[self setupControllerForProject:state skipMissingFiles:YES];
+	}
+	else
+	{
+		self.defaultProjectPath = folder;
+		self.projectPath = folder;
+		self.fileBrowserVisible = YES;
+		[self.fileBrowser goToURL:[NSURL fileURLWithPath:folder]];
+		if(self.documents.count)
+			[self openAndSelectDocument:self.documents[self.selectedTabIndex] activate:YES];
+		else
+			[self updateWindowTitle];
+	}
+
+	self.disableFileBrowserWindowResize = disableResize;
+	[NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:[NSURL fileURLWithPath:folder]];
+	[self bringToFront];
+}
+
 - (NSDictionary*)sessionInfoIncludingUntitledDocuments:(BOOL)includeUntitled
 {
 	NSMutableDictionary* res = [NSMutableDictionary dictionary];
@@ -3960,7 +4037,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 			doc[@"displayName"] = document.displayName;
 		if(NSString* title = _tabTitles[document.identifier])
 			doc[@"tabTitle"] = title;
-		if([document isEqual:self.selectedDocument])
+		if(_selectedTabIndex < _documents.count && [document isEqual:_documents[_selectedTabIndex]])
 			doc[@"selected"] = @YES;
 		if([self isDocumentSticky:document])
 			doc[@"sticky"] = @YES;
@@ -4213,7 +4290,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 	for(DocumentWindowController* candidate in SortedControllers())
 	{
-		if([folder isEqualToString:candidate.projectPath ?: candidate.defaultProjectPath])
+		NSString* candidatePath = candidate.defaultProjectPath ?: candidate.projectPath;
+		if(candidatePath && [folder isEqualToString:to_ns(path::resolve(to_s(candidatePath)))])
 		{
 			[NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:[NSURL fileURLWithPath:folder]];
 			candidate.defaultProjectPath = folder;
@@ -4224,8 +4302,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 	}
 
 	DocumentWindowController* controller = SortedControllers().firstObject;
-	BOOL hasOpenProject = controller && (controller.defaultProjectPath || controller.projectPath);
-	if(hasOpenProject)
+	NSString* previousFolder = controller.defaultProjectPath ?: controller.projectPath;
+	if(previousFolder)
 	{
 		NSAlert* alert = [NSAlert new];
 		alert.messageText = @"A project is already open in this window.";
@@ -4234,40 +4312,20 @@ static NSUInteger DisableSessionSavingCount = 0;
 		[alert addButtonWithTitle:@"New Window"];
 		[alert addButtonWithTitle:@"Cancel"];
 		NSModalResponse response = [alert runModal];
-		if(response == NSAlertThirdButtonReturn)
+		if(response == NSAlertFirstButtonReturn)
+		{
+			[controller confirmProjectCloseWithCompletionHandler:^{
+				[controller openProjectAtPath:folder replacingProjectAtPath:previousFolder];
+			}];
 			return;
-		if(response == NSAlertSecondButtonReturn)
-			controller = nil;
-		else
-			[controller saveProjectState];
+		}
+		if(response != NSAlertSecondButtonReturn)
+			return;
+		controller = nil;
 	}
 
-	[NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:[NSURL fileURLWithPath:folder]];
 	if(!controller)
 		controller = [DocumentWindowController new];
-	BOOL canRestoreProject = controller.documents.count == 0 || (controller.documents.count == 1 && is_disposable(controller.selectedDocument));
-	if(canRestoreProject && controller.selectedDocument)
-		controller.selectedDocument.customName = @"not untitled"; // release potential untitled token used
-
-	NSDictionary* project;
-	if(canRestoreProject && ![NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableFolderStateRestore])
-		project = [[DocumentWindowController sharedProjectStateDB] valueForKey:folder];
-
-	if(project)
-	{
-		[controller setupControllerForProject:project skipMissingFiles:YES];
-	}
-	else
-	{
-		controller.defaultProjectPath = folder;
-		controller.projectPath = folder;
-		controller.fileBrowserVisible = YES;
-		[controller.fileBrowser goToURL:[NSURL fileURLWithPath:folder]];
-		if(controller.documents.count)
-			[controller openAndSelectDocument:controller.documents[controller.selectedTabIndex] activate:YES];
-		else
-			[controller updateWindowTitle];
-	}
-	[controller bringToFront];
+	[controller openProjectAtPath:folder replacingProjectAtPath:nil];
 }
 @end
