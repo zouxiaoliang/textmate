@@ -440,11 +440,6 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 
 - (void)setDocument:(OakDocument*)aDocument
 {
-	[self clearGhostText];
-	_definitionHighlightRange = ng::range_t();
-	_lspHoverHighlightRange = ng::range_t();
-	_lspHoverCache = nil;
-
 	if(aDocument && [_document isEqual:aDocument])
 	{
 		if(_document.selection)
@@ -461,6 +456,11 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 		[self resetBlinkCaretTimer];
 		return;
 	}
+	[self clearInlayHints];
+	[self clearGhostText];
+	_definitionHighlightRange = ng::range_t();
+	_lspHoverHighlightRange = ng::range_t();
+	_lspHoverCache = nil;
 
 	CGFloat fontScaleFactor = 1;
 	if(documentView)
@@ -512,7 +512,16 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 		{
 			buffer_refresh_callback_t (OakTextView* textView) : textView(textView) { }
 			void did_parse (size_t from, size_t to)                                { [textView redisplayFrom:from to:to]; }
-			void did_replace (size_t from, size_t to, char const* buf, size_t len) { textView->_lspHoverCache = nil; NSAccessibilityPostNotification(textView, NSAccessibilityValueChangedNotification); }
+			void did_replace (size_t from, size_t to, char const* buf, size_t len)
+			{
+				OakTextView* view = textView;
+				view->_lspHoverCache = nil;
+				NSAccessibilityPostNotification(view, NSAccessibilityValueChangedNotification);
+				OakDocument* doc = view.document;
+				dispatch_async(dispatch_get_main_queue(), ^{
+					if(view.document == doc) { [view clearInlayHints]; [view scheduleInlayHints]; }
+				});
+			}
 
 		private:
 			__weak OakTextView* textView;
@@ -565,6 +574,7 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 		_links.reset();
 		NSAccessibilityPostNotification(self, NSAccessibilityValueChangedNotification);
 		[self scheduleScmDiffGutterUpdate];
+		[self scheduleInlayHints];
 
 		if(hasFocus)
 			[NSFontManager.sharedFontManager setSelectedFont:self.font isMultiple:NO];
@@ -592,6 +602,9 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 
 		_diagnosticBannersVisible = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsLSPShowInlineDiagnosticsKey];
 		_expandedDiagnosticLine   = kNoExpandedDiagnostic;
+		_inlayHintRequestedLines = NSMakeRange(NSNotFound, 0);
+		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshInlayHints:) name:LSPDocumentDidOpenNotification object:nil];
+		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshInlayHints:) name:LSPInlayHintsRefreshNotification object:nil];
 		[NSNotificationCenter.defaultCenter addObserver:self
 			selector:@selector(lspDiagnosticsDidChange:)
 			name:LSPDiagnosticsDidChangeNotification
@@ -3935,6 +3948,7 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 				object:clipView];
 		}
 	}
+	[self scheduleInlayHints];
 }
 
 - (void)windowDidResignKey:(NSNotification*)aNotification
@@ -3990,6 +4004,61 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 		[self dismissLSPHoverPanel];
 		return;
 	}
+
+	OakDocument* doc = self.document;
+	if(!doc || ![[LSPManager sharedManager] hasClientForDocument:doc])
+		return;
+
+	settings_t const settings = settings_for_path(to_s(doc.virtualPath ?: doc.path), to_s(doc.fileType), to_s(doc.directory ?: [doc.path stringByDeletingLastPathComponent]));
+	if(!settings.get("lspHover", true))
+	{
+		[self dismissLSPHoverPanel];
+		return;
+	}
+
+	ng::range_t wordRange;
+	if(index.index < documentView->size())
+	{
+		std::string ch = documentView->substr(index.index, index.index + 1);
+		if(!ch.empty() && (isalnum((unsigned char)ch[0]) || ch[0] == '_' || (unsigned char)ch[0] >= 0x80))
+			wordRange = ng::extend(*documentView, index, kSelectionExtendToWord).last();
+	}
+
+	if(wordRange == _lspHoverWordRange)
+		return;
+
+	// Keep the popover open while the pointer travels from the word to its tabs or links.
+	if(wordRange.empty() && _lspHoverTooltip.isVisible)
+	{
+		_lspHoverWordRange = ng::range_t();
+		++_lspHoverGeneration;
+		[self cancelLSPHoverRequest];
+		return;
+	}
+
+	[self dismissLSPHoverPanel];
+	if(wordRange.empty())
+		return;
+
+	_lspHoverWordRange = wordRange;
+	__weak OakTextView* weakSelf = self;
+	_lspHoverTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer* timer) {
+		OakTextView* strongSelf = weakSelf;
+		if(!strongSelf)
+			return;
+		strongSelf->_lspHoverTimer = nil;
+		if(strongSelf->_lspHoverWordRange == wordRange)
+			[strongSelf lspRequestHoverAtIndex:index];
+	}];
+}
+
+- (void)mouseExited:(NSEvent*)anEvent
+{
+	[_lspHoverTimer invalidate];
+	_lspHoverTimer = nil;
+	_lspHoverWordRange = ng::range_t();
+	++_lspHoverGeneration;
+	[self cancelLSPHoverRequest];
 }
 
 

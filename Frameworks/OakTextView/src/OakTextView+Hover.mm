@@ -31,10 +31,12 @@
 	OakDocument* doc = self.document;
 	if(!doc)
 		return;
+	NSUInteger generation = _lspHoverGeneration;
 
 	text::pos_t pos = documentView->convert(index.index);
 
 	ng::range_t wordRange = ng::extend(*documentView, index, kSelectionExtendToWord).last();
+	_lspHoverWordRange = wordRange;
 	std::string word = documentView->substr(wordRange.min().index, wordRange.max().index);
 	NSString* cacheKey = to_ns(word);
 
@@ -73,10 +75,12 @@
 		character:pos.column
 		completion:^(NSDictionary* hover) {
 			OakTextView* strongSelf = weakSelf;
-			if(!strongSelf || !strongSelf->documentView || !hover)
+			if(!strongSelf || !strongSelf->documentView || strongSelf->_lspHoverGeneration != generation || strongSelf.document != doc)
 				return;
 
 			strongSelf->_lspHoverRequestId = 0;
+			if(!hover)
+				return;
 
 			NSString* grammarScope = to_ns(strongSelf->documentView->file_type());
 			OakTooltipContent* content = [strongSelf createTooltipContentFromHover:hover grammarScope:grammarScope];
@@ -223,6 +227,10 @@
 
 - (void)dismissLSPHoverPanel
 {
+	[_lspHoverTimer invalidate];
+	_lspHoverTimer = nil;
+	_lspHoverWordRange = ng::range_t();
+	++_lspHoverGeneration;
 	[self cancelLSPHoverRequest];
 	if(_lspHoverTooltip.isVisible)
 	{

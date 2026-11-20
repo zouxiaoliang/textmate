@@ -58,6 +58,7 @@ namespace ng
 		void set_draw_indent_guides (bool drawIndentGuides);
 		void set_drop_marker (ng::index_t dropMarkerIndex);
 		void set_viewport_size (CGSize size);
+		void set_inlay_hints (std::map<size_t, std::string> const& hints);
 
 		bool draw_wrap_column () const          { return _draw_wrap_column; }
 		bool draw_indent_guides () const        { return _draw_indent_guides; }
@@ -150,6 +151,7 @@ namespace ng
 		void set_tab_size (size_t tabSize);
 		void did_insert (size_t first, size_t last);
 		void did_erase (size_t from, size_t to);
+		void clear_inlay_hints_for_edit ();
 
 		void setup_font_metrics ();
 		void clear_text_widths ();
@@ -172,6 +174,7 @@ namespace ng
 
 		ng::buffer_t&      _buffer;
 		ng::callback_t*    _buffer_callback;
+		std::map<size_t, std::string> _inlay_hints;
 
 		theme_ptr          _theme;
 		size_t             _tab_size;

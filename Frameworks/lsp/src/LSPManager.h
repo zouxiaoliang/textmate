@@ -6,6 +6,7 @@
 extern NSString* const LSPDiagnosticsDidChangeNotification;
 extern NSString* const LSPServerStatusDidChangeNotification;
 extern NSString* const LSPDocumentDidOpenNotification; // object: the document sent to its server
+extern NSString* const LSPInlayHintsRefreshNotification; // object: the document whose hints need refreshing
 
 @interface LSPManager : NSObject
 + (instancetype)sharedManager;
@@ -43,6 +44,7 @@ extern NSString* const LSPDocumentDidOpenNotification; // object: the document s
 - (NSArray*)cachedDocumentSymbolsForDocument:(OakDocument*)document;
 - (dispatch_block_t)requestDocumentSymbolsForDocument:(OakDocument*)document completion:(void(^)(NSArray* symbols))callback;
 - (BOOL)hasClientForDocument:(OakDocument*)document;
+- (BOOL)serverSupportsInlayHintsForDocument:(OakDocument*)document;
 - (NSDictionary<NSString*, NSNumber*>*)diagnosticCountsForDocument:(OakDocument*)document;
 - (NSArray<NSDictionary*>*)diagnosticsForDocument:(OakDocument*)document;
 // Cached report only. A received empty report differs from no report yet.

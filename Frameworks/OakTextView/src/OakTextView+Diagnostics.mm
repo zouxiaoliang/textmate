@@ -837,6 +837,7 @@ static NSSize diagnosticBoxTextSize (NSAttributedString* content, CGFloat maxWid
 
 - (void)diagnosticScrollBoundsDidChange:(NSNotification*)notification
 {
+	[self scheduleInlayHints];
 	// Banners are anchored to the viewport's right edge, so only a horizontal
 	// scroll invalidates them — vertical scroll blits them along with the text.
 	NSClipView* clipView = self.enclosingScrollView.contentView;

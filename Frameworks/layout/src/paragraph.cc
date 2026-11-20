@@ -134,6 +134,14 @@ namespace ng
 				_line = std::make_shared<ct::line_t>(fillStr, std::map<size_t, scope::scope_t>{ { 0, scope } }, theme, tabSize, metrics, nullptr);
 			}
 			break;
+
+			case kNodeTypeInlayHint:
+			{
+				scope::scope_t scope = buffer.scope(bufferOffset).right;
+				scope.push_scope("comment");
+				_line = std::make_shared<ct::line_t>(_hint, std::map<size_t, scope::scope_t>{ { 0, scope } }, theme, tabSize, metrics, nullptr);
+			}
+			break;
 		}
 	}
 
@@ -165,13 +173,14 @@ namespace ng
 				case kNodeTypeUnprintable: scope.push_scope("deco.unprintable");   break;
 				case kNodeTypeFolding:     scope.push_scope("deco.folding");       break;
 				case kNodeTypeSoftBreak:   scope.push_scope("deco.indented-wrap"); break;
+				case kNodeTypeInlayHint:   scope.push_scope("comment");            break;
 			}
 
 			styles_t const styles = theme->styles_for_scope(scope);
 			if(!CFEqual(backgroundColor, styles.background()))
 			{
 				CGFloat x1 = round(anchor.x);
-				CGFloat x2 = round(_type == kNodeTypeSoftBreak || _type == kNodeTypeNewline ? CGRectGetMaxX(visibleRect) : anchor.x + _width);
+				CGFloat x2 = round(_type == kNodeTypeSoftBreak || _type == kNodeTypeNewline ? CGRectGetMaxX(visibleRect) : anchor.x + width());
 				render::fill_rect(context, styles.background(), CGRectMake(x1, anchor.y, x2 - x1, lineHeight));
 			}
 		}
@@ -338,6 +347,23 @@ namespace ng
 		{
 			node.did_update_scopes(from - i, to - i);
 			i += node.length();
+		}
+		_dirty = true;
+	}
+
+	void paragraph_t::set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints)
+	{
+		_nodes.erase(std::remove_if(_nodes.begin(), _nodes.end(), [](node_t const& node) {
+			return node.type() == kNodeTypeInlayHint;
+		}), _nodes.end());
+		for(auto const& hint : hints)
+		{
+			if(hint.first > length() || hint.second.empty())
+				continue;
+			auto at = iterator_at(hint.first);
+			// A folded span has no insertion boundary inside it.
+			if(at != _nodes.end() || hint.first == length())
+				_nodes.insert(at, node_t(hint.second));
 		}
 		_dirty = true;
 	}

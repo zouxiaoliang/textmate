@@ -628,6 +628,13 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				if([_delegate respondsToSelector:@selector(lspClient:didReceiveNotification:params:)])
 					[_delegate lspClient:self didReceiveNotification:@"workspace/semanticTokens/refresh" params:@{}];
 			}
+			else if(method == "workspace/inlayHint/refresh")
+			{
+				json response = {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nullptr}};
+				[self sendMessage:response];
+				if([_delegate respondsToSelector:@selector(lspClient:didReceiveNotification:params:)])
+					[_delegate lspClient:self didReceiveNotification:@"workspace/inlayHint/refresh" params:@{}];
+			}
 			else if(method == "window/showMessageRequest")
 			{
 				std::string message = msg["params"].contains("message") ? msg["params"]["message"].get<std::string>() : "";
@@ -898,7 +905,8 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				NSMutableSet* queries = [NSMutableSet set];
 				NSDictionary<NSString*, NSString*>* providers = @{ @"textDocument/definition": @"definitionProvider", @"textDocument/references": @"referencesProvider",
 					@"textDocument/declaration": @"declarationProvider", @"textDocument/typeDefinition": @"typeDefinitionProvider", @"textDocument/implementation": @"implementationProvider",
-					@"textDocument/documentSymbol": @"documentSymbolProvider", @"workspace/symbol": @"workspaceSymbolProvider", @"textDocument/hover": @"hoverProvider" };
+					@"textDocument/documentSymbol": @"documentSymbolProvider", @"workspace/symbol": @"workspaceSymbolProvider", @"textDocument/hover": @"hoverProvider",
+					@"textDocument/inlayHint": @"inlayHintProvider" };
 				BOOL utf16 = !caps.contains("positionEncoding") || caps["positionEncoding"] == "utf-16";
 				for(NSString* method in providers) {
 					auto found = caps.find(providers[method].UTF8String);
@@ -1223,6 +1231,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 		{"capabilities", {
 			{"general", {{"positionEncodings", {"utf-16"}}}},
 			{"textDocument", {
+				{"inlayHint", { {"dynamicRegistration", false} }},
 				{"documentSymbol", {{"dynamicRegistration", false}, {"hierarchicalDocumentSymbolSupport", true}}},
 				{"references", {{"dynamicRegistration", false}}},
 				{"publishDiagnostics", json::object()},
@@ -1281,6 +1290,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				{"workDoneProgress", true}
 			}},
 			{"workspace", {
+				{"inlayHint", { {"refreshSupport", true} }},
 				{"symbol", {{"dynamicRegistration", false}}},
 				{"diagnostics", {{"refreshSupport", true}}},
 				{"semanticTokens", {{"refreshSupport", true}}},

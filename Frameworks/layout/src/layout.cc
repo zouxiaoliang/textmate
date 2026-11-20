@@ -41,7 +41,7 @@ namespace ng
 		struct parser_callback_t : ng::callback_t
 		{
 			parser_callback_t (layout_t& layout) : layout(layout) { }
-			void did_replace (size_t from, size_t to, char const* buf, size_t len) { layout.did_erase(from, to); layout.did_insert(from, from + len); }
+			void did_replace (size_t from, size_t to, char const* buf, size_t len) { layout.clear_inlay_hints_for_edit(); layout.did_erase(from, to); layout.did_insert(from, from + len); }
 
 		private:
 			layout_t& layout;
@@ -135,6 +135,46 @@ namespace ng
 	void layout_t::set_scroll_past_end (bool scrollPastEnd)
 	{
 		_scroll_past_end = scrollPastEnd;
+	}
+
+	void layout_t::set_inlay_hints (std::map<size_t, std::string> const& hints)
+	{
+		if(_inlay_hints == hints)
+			return;
+
+		std::set<size_t> affected;
+		for(auto const& hint : _inlay_hints)
+			affected.insert(row_for_offset(hint.first)->offset._length);
+		for(auto const& hint : hints)
+			if(hint.first <= _buffer.size()) affected.insert(row_for_offset(hint.first)->offset._length);
+		_inlay_hints = hints;
+
+		for(size_t offset : affected)
+		{
+			auto row = row_for_offset(offset);
+			std::vector<std::pair<size_t, std::string>> local;
+			for(auto it = _inlay_hints.lower_bound(offset); it != _inlay_hints.end() && it->first <= offset + row->value.length(); ++it)
+				if(row_for_offset(it->first) == row) local.emplace_back(it->first - offset, it->second);
+			row->value.set_inlay_hints(local);
+			update_metrics_for_row(row);
+		}
+		_dirty_rects.push_back(OakRectMake(0, 0, width(), height()));
+	}
+
+	void layout_t::clear_inlay_hints_for_edit ()
+	{
+		if(_inlay_hints.empty())
+			return;
+		std::set<size_t> affected;
+		for(auto const& hint : _inlay_hints)
+			affected.insert(row_for_offset(hint.first)->offset._length);
+		_inlay_hints.clear();
+		for(size_t offset : affected)
+		{
+			auto row = row_for_offset(offset);
+			row->value.set_inlay_hints({});
+			update_row(row);
+		}
 	}
 
 	// ======================

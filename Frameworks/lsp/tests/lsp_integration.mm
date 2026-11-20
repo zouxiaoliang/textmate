@@ -453,6 +453,33 @@ static TestOutcome RunF8Close (NSString* fixture)
 	return outcome;
 }
 
+static TestOutcome RunF9Inlay (NSString* fixture)
+{
+	TestOutcome outcome;
+	LSPTestHarness* harness = [[LSPTestHarness alloc] initWithFixture:fixture scenario:@"f9_inlay"];
+	if(![harness start])
+	{
+		outcome.detail = ToStd(harness.failureReason);
+		[harness finish];
+		return outcome;
+	}
+
+	__block NSArray* hints = nil;
+	BOOL supported = [harness.client supportsLanguageQuery:@"textDocument/inlayHint"];
+	[harness.client sendCustomRequest:@"textDocument/inlayHint" params:@{
+		@"textDocument": @{ @"uri": harness.documentURI },
+		@"range": @{ @"start": @{ @"line": @0, @"character": @0 }, @"end": @{ @"line": @0, @"character": @20 } }
+	} completion:^(id result) {
+		if([result isKindOfClass:[NSArray class]]) hints = result;
+	}];
+	BOOL received = WaitUntil(10.0, ^{ return hints != nil; });
+	NSDictionary* verdict = [harness waitForVerdict:2.0];
+	outcome.passed = supported && received && hints.count == 2 && [hints[0][@"label"] isEqualToString:@"value:"] && [verdict[@"status"] isEqualToString:@"PASS"];
+	outcome.detail = ToStd([NSString stringWithFormat:@"supported=%d received=%d count=%lu verdict=%@", supported, received, (unsigned long)hints.count, verdict[@"status"]]);
+	[harness finish];
+	return outcome;
+}
+
 // MARK: - main
 
 int main ()
@@ -477,6 +504,7 @@ int main ()
 			{ "f6_coalesce",    RunF6Coalesce    },
 			{ "f7_no_provider", RunF7NoProvider  },
 			{ "f8_close",       RunF8Close       },
+			{ "f9_inlay",       RunF9Inlay       },
 		};
 
 		for(auto const& test : cases)

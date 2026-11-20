@@ -224,6 +224,7 @@ struct document_view_t : ng::buffer_api_t
 	void set_draw_indent_guides (bool drawIndentGuides) { _layout->set_draw_indent_guides(drawIndentGuides); }
 	void set_drop_marker (ng::index_t dropMarkerIndex) { _layout->set_drop_marker(dropMarkerIndex); }
 	void set_viewport (CGRect rect) { _layout->set_viewport_size(rect.size); }
+	void set_inlay_hints (std::map<size_t, std::string> const& hints) { _layout->set_inlay_hints(hints); }
 	bool draw_wrap_column () const { return _layout->draw_wrap_column(); }
 	bool draw_indent_guides () const { return _layout->draw_indent_guides(); }
 	void update_metrics (CGRect visibleRect) { _layout->update_metrics(visibleRect); }
@@ -334,9 +335,18 @@ struct diagnostic_banner_t
 	// = LSP Hover =
 
 	OakInfoTooltip* _lspHoverTooltip;
+	NSTimer* _lspHoverTimer;
+	ng::range_t _lspHoverWordRange;
 	int _lspHoverRequestId;
+	NSUInteger _lspHoverGeneration;
 	NSMutableDictionary* _lspHoverCache;
 	ng::range_t _lspHoverHighlightRange;
+
+	// = LSP Inlay Hints =
+	NSTimer* _inlayHintTimer;
+	dispatch_block_t _inlayHintCancellation;
+	NSUInteger _inlayHintGeneration;
+	NSRange _inlayHintRequestedLines;
 
 	// = LSP References =
 
@@ -404,6 +414,7 @@ struct diagnostic_banner_t
 - (void)updateSymbol;
 - (void)updateMarkedRanges;
 - (void)redisplayFrom:(size_t)from to:(size_t)to;
+- (void)reflectDocumentSize;
 - (NSImage*)imageForRanges:(ng::ranges_t const&)ranges imageRect:(NSRect*)outRect;
 - (void)showToolTip:(NSString*)text;
 - (std::map<std::string, std::string>)variables;
@@ -457,6 +468,12 @@ struct diagnostic_banner_t
 - (OakTooltipContent*)createTooltipContentFromHover:(NSDictionary*)hover grammarScope:(NSString*)grammarScope;
 - (NSAttributedString*)parseMarkdownToAttributedString:(NSString*)markdown;
 - (NSAttributedString*)parseMarkdownDocumentation:(NSString*)text;
+@end
+
+@interface OakTextView (InlayHints)
+- (void)scheduleInlayHints;
+- (void)clearInlayHints;
+- (void)refreshInlayHints:(NSNotification*)notification;
 @end
 
 @interface OakTextView (LSP)

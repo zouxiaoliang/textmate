@@ -60,6 +60,7 @@ class FakeLSP:
 		self.uri = None
 		self.first_diag_id = None
 		self.diag_request_count = 0
+		self.inlay_advertised = False
 
 		# f0
 		self.f0_register_id = None
@@ -167,6 +168,9 @@ class FakeLSP:
 		method = msg["method"]
 		if method == "initialize":
 			self.initialize_id = msg["id"]
+			if self.scenario == "f9_inlay":
+				caps = msg.get("params", {}).get("capabilities", {})
+				self.inlay_advertised = "inlayHint" in caps.get("textDocument", {}) and caps.get("workspace", {}).get("inlayHint", {}).get("refreshSupport") is True
 			self.send({
 				"jsonrpc": "2.0",
 				"id": msg["id"],
@@ -177,6 +181,14 @@ class FakeLSP:
 			})
 		elif method == "textDocument/diagnostic":
 			self.on_diagnostic(msg)
+		elif method == "textDocument/inlayHint" and self.scenario == "f9_inlay":
+			params = msg.get("params", {})
+			valid = self.inlay_advertised and params.get("textDocument", {}).get("uri") == self.uri and params.get("range", {}).get("start") == {"line": 0, "character": 0}
+			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": [
+				{"position": {"line": 0, "character": 10}, "label": "value:", "kind": 2, "paddingRight": True},
+				{"position": {"line": 0, "character": 12}, "label": [{"value": "type:"}], "kind": 1},
+			]})
+			self.set_verdict("PASS" if valid else "FAIL", "inlay capability and range request" if valid else "missing capability or malformed range")
 		elif method == "shutdown":
 			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
 		else:
@@ -246,6 +258,8 @@ class FakeLSP:
 				"identifier": "fake",
 				"interFileDependencies": False,
 			}
+		if self.scenario == "f9_inlay":
+			caps["inlayHintProvider"] = True
 		return caps
 
 	def touch_ready(self):

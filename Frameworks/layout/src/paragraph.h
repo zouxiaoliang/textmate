@@ -28,6 +28,7 @@ namespace ng
 		void insert_folded (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset);
 		void erase (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset);
 		void did_update_scopes (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset);
+		void set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints);
 		bool layout (theme_ptr const& theme, bool softWrap, size_t wrapColumn, ct::metrics_t const& metrics, CGRect visibleRect, ng::buffer_t const& buffer, size_t bufferOffset);
 
 		void draw_background (theme_ptr const& theme, ct::metrics_t const& metrics, ng::context_t const& context, bool isFlipped, CGRect visibleRect, CGColorRef backgroundColor, ng::buffer_t const& buffer, size_t bufferOffset, CGPoint anchor) const;
@@ -61,11 +62,12 @@ namespace ng
 		bool structural_integrity () const { return true; }
 
 	private:
-		enum node_type_t { kNodeTypeText, kNodeTypeUnprintable, kNodeTypeFolding, kNodeTypeSoftBreak, kNodeTypeNewline };
+		enum node_type_t { kNodeTypeText, kNodeTypeUnprintable, kNodeTypeFolding, kNodeTypeSoftBreak, kNodeTypeNewline, kNodeTypeInlayHint };
 
 		struct node_t
 		{
 			node_t (node_type_t type, size_t length = 0, CGFloat width = 0) : _type(type), _length(length), _width(width) { }
+			node_t (std::string const& hint) : _type(kNodeTypeInlayHint), _length(0), _width(0), _hint(hint) { }
 
 			void insert (size_t i, size_t len);
 			void erase (size_t from, size_t to);
@@ -86,6 +88,7 @@ namespace ng
 			node_type_t _type;
 			size_t _length;
 			CGFloat _width;
+			std::string _hint;
 
 			std::shared_ptr<ct::line_t> _line;
 		};

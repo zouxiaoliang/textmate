@@ -14,6 +14,7 @@
 NSString* const LSPDiagnosticsDidChangeNotification = @"LSPDiagnosticsDidChange";
 NSString* const LSPServerStatusDidChangeNotification = @"LSPServerStatusDidChange";
 NSString* const LSPDocumentDidOpenNotification = @"LSPDocumentDidOpen";
+NSString* const LSPInlayHintsRefreshNotification = @"LSPInlayHintsRefresh";
 
 static NSDictionary<NSString*, NSString*>* scopeToLanguageId ()
 {
@@ -375,17 +376,38 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSString* root = to_ns(rootPath);
 	std::string initOpts = settings.get("lspInitOptions", "");
 	NSString* initOptsJSON = initOpts.empty() ? nil : to_ns(initOpts);
+	// gopls disables parameter-name hints by default even when the client requests
+	// inlay hints. Preserve an explicit choice in lspInitOptions.
+	std::vector<std::string> parts = path::unescape(lspCommand);
+	if(parts.empty())
+		return nil;
+	NSString* executable = to_ns(parts[0]);
+	if([executable.lastPathComponent isEqualToString:@"gopls"])
+	{
+		NSDictionary* configured = initOptsJSON.length ? [NSJSONSerialization JSONObjectWithData:[initOptsJSON dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : @{};
+		if([configured isKindOfClass:[NSDictionary class]])
+		{
+			NSMutableDictionary* options = [configured mutableCopy];
+			NSDictionary* hints = options[@"hints"];
+			if(!hints)
+				hints = @{};
+			if([hints isKindOfClass:[NSDictionary class]] && !hints[@"parameterNames"])
+			{
+				NSMutableDictionary* updatedHints = [hints mutableCopy];
+				updatedHints[@"parameterNames"] = @YES;
+				options[@"hints"] = updatedHints;
+				NSData* json = [NSJSONSerialization dataWithJSONObject:options options:0 error:nil];
+				if(json)
+					initOptsJSON = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+			}
+		}
+	}
 	NSString* key = [@[root, to_ns(lspCommand), initOptsJSON ?: @""] componentsJoinedByString:@"\u001f"];
 	LSPClient* client = _clients[key];
 	if(client)
 		return client;
 
 	// Parse command: first whitespace-delimited token is executable, rest are args
-	std::vector<std::string> parts = path::unescape(lspCommand);
-	if(parts.empty())
-		return nil;
-
-	NSString* executable = to_ns(parts[0]);
 	NSMutableArray<NSString*>* args = [NSMutableArray new];
 	for(size_t i = 1; i < parts.size(); ++i)
 		[args addObject:to_ns(parts[i])];
@@ -1000,6 +1022,12 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	return document && _documentClients[document.identifier] != nil;
 }
 
+- (BOOL)serverSupportsInlayHintsForDocument:(OakDocument*)document
+{
+	LSPClient* client = document ? _documentClients[document.identifier] : nil;
+	return client && [client supportsLanguageQuery:@"textDocument/inlayHint"];
+}
+
 - (NSDictionary<NSString*, NSNumber*>*)diagnosticCountsForDocument:(OakDocument*)document
 {
 	NSUInteger errors = 0, warnings = 0, info = 0;
@@ -1175,6 +1203,14 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 
 - (void)lspClient:(LSPClient*)client didReceiveNotification:(NSString*)method params:(NSDictionary*)params
 {
+	if([method isEqualToString:@"workspace/inlayHint/refresh"])
+	{
+		for(NSUUID* docId in [_openDocuments copy])
+			if(_documentClients[docId] == client)
+				if(OakDocument* doc = [OakDocument documentWithIdentifier:docId])
+					[NSNotificationCenter.defaultCenter postNotificationName:LSPInlayHintsRefreshNotification object:doc];
+		return;
+	}
 	if(![method isEqualToString:@"workspace/semanticTokens/refresh"])
 		return;
 	for(NSUUID* docId in [_openDocuments copy])

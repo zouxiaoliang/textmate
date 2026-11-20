@@ -10,6 +10,7 @@ Audit date: 2026-03-24. Based on TextMate's LSP client implementation in `Framew
 | textDocument/completion + completionItem/resolve | Done |
 | textDocument/definition | Done |
 | textDocument/hover | Done |
+| textDocument/inlayHint + workspace/inlayHint/refresh | Done (visible range, inline virtual text) |
 | textDocument/references | Done |
 | textDocument/rename + prepareRename | Done |
 | textDocument/codeAction + codeAction/resolve | Done |
@@ -73,7 +74,6 @@ We declare `relatedInformation: true` but discard the data in `handleDiagnostics
 | Capability | Reason |
 |---|---|
 | workspace/codeLens/refresh | CodeLens not implemented |
-| workspace/inlayHint/refresh | Inlay hints not implemented |
 | workspace/diagnostic/refresh | Using push diagnostics model |
 | workspace/workspaceFolders (request) | Single-root model works fine |
 
