@@ -55,6 +55,17 @@ int main ()
 		settings_t empty(std::map<std::string, std::string>{ { "lspCommand", "" } });
 		Check(LSPCommandForDocument(empty, @"/tmp/example.go").empty(), @"empty command disables automatic selection");
 
+		auto goplsOptions = ^NSDictionary*(NSString* json) {
+			NSString* result = LSPGoplsInitializationOptions(json);
+			return [NSJSONSerialization JSONObjectWithData:[result dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+		};
+		Check([goplsOptions(nil)[@"semanticTokens"] boolValue], @"gopls enables semantic tokens by default");
+		Check([goplsOptions(nil)[@"hints"][@"parameterNames"] boolValue], @"gopls enables parameter name hints by default");
+		NSDictionary* custom = goplsOptions(@"{\"semanticTokens\":false,\"hints\":{\"parameterNames\":false},\"staticcheck\":true}");
+		Check([custom[@"semanticTokens"] isEqual:@NO], @"gopls preserves explicit semantic token setting");
+		Check([custom[@"hints"][@"parameterNames"] isEqual:@NO], @"gopls preserves explicit hint setting");
+		Check([custom[@"staticcheck"] isEqual:@YES], @"gopls preserves unrelated options");
+
 		// GUI-launched TextMate has a system PATH even when Go installed gopls
 		// into ~/go/bin. Exercise the actual document selection path.
 		NSString* goBin = [directory stringByAppendingPathComponent:@"go/bin"];

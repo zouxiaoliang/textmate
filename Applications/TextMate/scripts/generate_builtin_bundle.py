@@ -23,6 +23,11 @@ def match(pattern, scope):
     return {"match": pattern, "name": scope}
 
 
+def captures(pattern, scopes):
+    return {"match": pattern, "captures": {str(index): {"name": scope}
+                                           for index, scope in scopes.items()}}
+
+
 def region(begin, end, scope, patterns=()):
     return {"begin": begin, "end": end, "name": scope, "patterns": list(patterns)}
 
@@ -47,6 +52,33 @@ def language(name, scope, extensions, keywords=(), comments=(), strings=True, ex
 HASH = [match(r"#.*$", "comment.line.number-sign")]
 SLASH = [match(r"//.*$", "comment.line.double-slash"),
          region(r"/\*", r"\*/", "comment.block")]
+
+# The fallback Go grammar should remain useful even when no full language bundle
+# or semantic-token-capable gopls is installed. Keep declaration and selector
+# patterns ahead of generic calls, keywords, and constants.
+GO_PATTERNS = [
+    region("`", "`", "string.quoted.raw.go"),
+    captures(r"\b(func)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\b",
+             {1: "keyword.control", 2: "entity.name.function"}),
+    captures(r"\b(type)\s+([A-Za-z_]\w*)\b",
+             {1: "keyword.control", 2: "entity.name.type"}),
+    match(r"\b(?:string|bool|byte|rune|error|any|comparable|int(?:8|16|32|64)?|uint(?:8|16|32|64|ptr)?|float(?:32|64)|complex(?:64|128))\b",
+          "storage.type"),
+    match(r"\b(?:append|cap|clear|close|complex|copy|delete|imag|len|make|max|min|new|panic|print|println|real|recover)(?=\s*\()",
+          "support.function.builtin"),
+    captures(r"\b([A-Za-z_]\w*)\.([A-Z][A-Z0-9_]*)\b(?!\s*\()",
+             {2: "constant.other"}),
+    captures(r"\b(?:[A-Za-z_]\w*\.)?([A-Z][A-Za-z_0-9]*)\b(?=\s*\{)",
+             {1: "entity.name.type"}),
+    captures(r"\*\s*(?:[A-Za-z_]\w*\.)?([A-Z][A-Za-z_0-9]*)\b",
+             {1: "entity.name.type"}),
+    captures(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?=\s*\()",
+             {2: "entity.name.function"}),
+    match(r"\b(?!if\b|for\b|switch\b|select\b|func\b|go\b|defer\b|return\b)[A-Za-z_]\w*(?=\s*\()",
+          "entity.name.function"),
+    match(r"\b[A-Za-z_]\w*(?=\s*:)", "variable.other.property"),
+    match(r"(?:\:=|<-|==|!=|<=|>=|&&|\|\||\+\+|--|[+*/%&|^~!=<>-])", "keyword.operator"),
+]
 
 GRAMMARS = [
     language("Python", "source.python", ["py", "pyw"],
@@ -77,7 +109,8 @@ GRAMMARS = [
              SLASH, extra=[match(r"@(?:interface|implementation|protocol|end|property|synthesize|selector|class|import)\b", "keyword.control"),
                            match(r"^\s*#\s*\w+", "keyword.control.import")]),
     language("Go", "source.go", ["go"],
-             "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var".split(), SLASH),
+             "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var".split(), SLASH,
+             extra=GO_PATTERNS),
     language("Rust", "source.rust", ["rs"],
              "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self static struct super trait true type unsafe use where while".split(), SLASH),
     language("CSS", "source.css", ["css", "scss", "less"],

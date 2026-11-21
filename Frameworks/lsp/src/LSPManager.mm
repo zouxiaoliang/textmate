@@ -255,6 +255,34 @@ std::string LSPCommandForDocument (settings_t const& settings, NSString* filePat
 	return command ? to_s(command) : "";
 }
 
+NSString* LSPGoplsInitializationOptions (NSString* configuredJSON)
+{
+	NSDictionary* configured = configuredJSON.length ? [NSJSONSerialization JSONObjectWithData:[configuredJSON dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : @{};
+	if(![configured isKindOfClass:NSDictionary.class])
+		return configuredJSON;
+	NSMutableDictionary* options = [configured mutableCopy];
+	BOOL changed = NO;
+	NSDictionary* hints = options[@"hints"];
+	if(!hints)
+		hints = @{};
+	if([hints isKindOfClass:NSDictionary.class] && !hints[@"parameterNames"])
+	{
+		NSMutableDictionary* updatedHints = [hints mutableCopy];
+		updatedHints[@"parameterNames"] = @YES;
+		options[@"hints"] = updatedHints;
+		changed = YES;
+	}
+	if(!options[@"semanticTokens"])
+	{
+		options[@"semanticTokens"] = @YES;
+		changed = YES;
+	}
+	if(changed)
+		if(NSData* json = [NSJSONSerialization dataWithJSONObject:options options:0 error:nil])
+			return [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+	return configuredJSON;
+}
+
 static std::vector<std::string> const& workspaceMarkers ()
 {
 	static std::vector<std::string> const markers = {
@@ -383,25 +411,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		return nil;
 	NSString* executable = to_ns(parts[0]);
 	if([executable.lastPathComponent isEqualToString:@"gopls"])
-	{
-		NSDictionary* configured = initOptsJSON.length ? [NSJSONSerialization JSONObjectWithData:[initOptsJSON dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : @{};
-		if([configured isKindOfClass:[NSDictionary class]])
-		{
-			NSMutableDictionary* options = [configured mutableCopy];
-			NSDictionary* hints = options[@"hints"];
-			if(!hints)
-				hints = @{};
-			if([hints isKindOfClass:[NSDictionary class]] && !hints[@"parameterNames"])
-			{
-				NSMutableDictionary* updatedHints = [hints mutableCopy];
-				updatedHints[@"parameterNames"] = @YES;
-				options[@"hints"] = updatedHints;
-				NSData* json = [NSJSONSerialization dataWithJSONObject:options options:0 error:nil];
-				if(json)
-					initOptsJSON = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
-			}
-		}
-	}
+		initOptsJSON = LSPGoplsInitializationOptions(initOptsJSON);
 	NSString* key = [@[root, to_ns(lspCommand), initOptsJSON ?: @""] componentsJoinedByString:@"\u001f"];
 	LSPClient* client = _clients[key];
 	if(client)
