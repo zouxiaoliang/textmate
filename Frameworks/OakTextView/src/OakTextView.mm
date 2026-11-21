@@ -457,6 +457,7 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 		return;
 	}
 	[self clearInlayHints];
+	[self invalidateLSPCompletionRequest];
 	[self clearGhostText];
 	_definitionHighlightRange = ng::range_t();
 	_lspHoverHighlightRange = ng::range_t();
@@ -2047,8 +2048,7 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 			{
 				[self oldKeyDown:anEvent];
 				_lspFilterPrefix = [_lspFilterPrefix stringByAppendingString:chars];
-				// Re-query server with updated cursor position for fresh results
-				[self lspComplete:nil];
+				// insertText: schedules a fresh request after this key event finishes.
 				return;
 			}
 			else if(isBackspace)
@@ -2064,7 +2064,18 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 					--ps;
 				if(lineText.size() - ps > 0)
 				{
-					[self lspComplete:nil];
+					[self invalidateLSPCompletionRequest];
+					[_lspCompletionPopup dismiss];
+					OakDocument* doc = self.document;
+					__weak OakTextView* weakSelf = self;
+					dispatch_async(dispatch_get_main_queue(), ^{
+						OakTextView* view = weakSelf;
+						if(view.document == doc && view.window.firstResponder == view)
+						{
+							[view invalidateLSPCompletionRequest];
+							[view requestLSPCompletionAutomatically:YES];
+						}
+					});
 					return;
 				}
 				[_lspCompletionPopup dismiss];
@@ -2215,6 +2226,15 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 	[self recordSelector:@selector(insertText:) withArgument:[NSString stringWithCxxString:str]];
 	bool autoPairing = !macroRecordingArray && ![NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableTypingPairsKey];
 	documentView->insert_with_pairing(str, [self indentCorrections], autoPairing, to_s([self scopeAttributes]));
+
+	NSString* typedText = [NSString stringWithCxxString:str];
+	OakDocument* doc = self.document;
+	__weak OakTextView* weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		OakTextView* view = weakSelf;
+		if(view.document == doc)
+			[view scheduleAutomaticLSPCompletionForText:typedText];
+	});
 }
 
 - (IBAction)toggleCurrentFolding:(id)sender
@@ -4567,6 +4587,7 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 // (it is a child window pinned to window coordinates, not the scrolling content).
 - (void)dismissCompletionPopupForScroll
 {
+	[self invalidateLSPCompletionRequest];
 	if([_lspCompletionPopup isVisible])
 		[_lspCompletionPopup dismiss];
 }

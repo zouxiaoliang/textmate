@@ -189,6 +189,13 @@ class FakeLSP:
 				{"position": {"line": 0, "character": 12}, "label": [{"value": "type:"}], "kind": 1},
 			]})
 			self.set_verdict("PASS" if valid else "FAIL", "inlay capability and range request" if valid else "missing capability or malformed range")
+		elif method == "textDocument/completion" and self.scenario == "f11_completion":
+			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": [
+				{"label": "foobar", "insertText": "foobar"},
+			]})
+			position = msg.get("params", {}).get("position", {})
+			valid = position.get("character") == 2 and position.get("line") == 0
+			self.set_verdict("PASS" if valid else "FAIL", "completion requested after two keystrokes" if valid else "premature or misplaced completion request")
 		elif method == "shutdown":
 			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
 		else:
@@ -260,6 +267,8 @@ class FakeLSP:
 			}
 		if self.scenario == "f9_inlay":
 			caps["inlayHintProvider"] = True
+		if self.scenario == "f11_completion":
+			caps["completionProvider"] = {"triggerCharacters": ["."]}
 		return caps
 
 	def touch_ready(self):
@@ -337,6 +346,11 @@ class FakeLSP:
 				self.set_verdict("PASS", "sent JSON-RPC error -32802 (ServerCancelled) for id=%s" % req_id)
 			else:
 				self.send_full_empty(req_id)
+		elif self.scenario == "f10_context_cancel":
+			message = "context canceled" if self.diag_request_count == 1 else "real server failure"
+			self.send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": message}})
+			if self.diag_request_count == 2:
+				self.set_verdict("PASS", "sent cancellation followed by real error")
 		elif self.scenario == "f6_coalesce":
 			if self.burst_active:
 				self.burst_count += 1

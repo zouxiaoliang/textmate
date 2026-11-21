@@ -480,6 +480,40 @@ static TestOutcome RunF9Inlay (NSString* fixture)
 	return outcome;
 }
 
+static TestOutcome RunF10ContextCancel (NSString* fixture)
+{
+	TestOutcome outcome;
+	LSPTestHarness* harness = [[LSPTestHarness alloc] initWithFixture:fixture scenario:@"f10_context_cancel"];
+	__block NSMutableArray<NSString*>* messages = [NSMutableArray new];
+	__block BOOL sawCancelResponse = NO;
+	id observer = [[NSNotificationCenter defaultCenter] addObserverForName:LSPShowMessageNotification object:harness.client queue:nil usingBlock:^(NSNotification* note) {
+		[messages addObject:note.userInfo[@"message"]];
+	}];
+	id logObserver = [[NSNotificationCenter defaultCenter] addObserverForName:LSPLogNotification object:harness.client queue:nil usingBlock:^(NSNotification* note) {
+		if([note.userInfo[@"message"] containsString:@"error -32603: context canceled"])
+			sawCancelResponse = YES;
+	}];
+	if([harness start])
+	{
+		// The first diagnostic request gets "context canceled" with a generic
+		// error code. A later real error must still reach the UI.
+		BOOL receivedCancel = WaitUntil(10.0, ^{ return sawCancelResponse; });
+		BOOL quietAfterCancel = messages.count == 0;
+		[harness changeDocumentContent:@"const n: number = 2;\n" version:2];
+		NSDictionary* verdict = [harness waitForVerdict:10.0];
+		BOOL sawRealError = WaitUntil(2.0, ^{ return messages.count > 0; });
+		outcome.passed = receivedCancel && quietAfterCancel && sawRealError && messages.count == 1 &&
+			[messages[0] isEqualToString:@"real server failure"] && [verdict[@"status"] isEqual:@"PASS"];
+		outcome.detail = ToStd([NSString stringWithFormat:@"receivedCancel=%d quietAfterCancel=%d messages=%@ verdict=%@", receivedCancel, quietAfterCancel, messages, verdict[@"status"]]);
+	}
+	else
+		outcome.detail = ToStd(harness.failureReason);
+	[[NSNotificationCenter defaultCenter] removeObserver:observer];
+	[[NSNotificationCenter defaultCenter] removeObserver:logObserver];
+	[harness finish];
+	return outcome;
+}
+
 // MARK: - main
 
 int main ()
@@ -505,10 +539,13 @@ int main ()
 			{ "f7_no_provider", RunF7NoProvider  },
 			{ "f8_close",       RunF8Close       },
 			{ "f9_inlay",       RunF9Inlay       },
+			{ "f10_context_cancel", RunF10ContextCancel },
 		};
 
 		for(auto const& test : cases)
 		{
+			if(getenv("TEXTMATE_LSP_TEST_CASE") && strcmp(getenv("TEXTMATE_LSP_TEST_CASE"), test.name) != 0)
+				continue;
 			TestOutcome outcome = test.run(fixture);
 			printf("%-16s %s  %s\n", test.name, outcome.passed ? "PASS" : "FAIL", outcome.detail.c_str());
 			fflush(stdout);

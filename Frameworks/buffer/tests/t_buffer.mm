@@ -194,6 +194,26 @@ void test_semantic_scopes_overlay ()
 	OAK_ASSERT_EQ(buf.scopes(0, buf.size()).count(1), 0);
 }
 
+void test_semantic_scopes_survive_other_line_edits ()
+{
+	ng::buffer_t buf("first\nsecond\nthird\n");
+	buf.set_semantic_scopes({ { 0, 5, "entity.name.function" }, { 6, 12, "variable.other" }, { 13, 18, "entity.name.type" } });
+
+	buf.insert(2, "XYZ");
+	OAK_ASSERT(to_s(buf.scopes(0, 1).at(0)).find("entity.name.function") == std::string::npos);
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(1), buf.begin(1) + 1).at(0)).find("variable.other") != std::string::npos);
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(2), buf.begin(2) + 1).at(0)).find("entity.name.type") != std::string::npos);
+
+	buf.replace(buf.begin(1) + 2, buf.begin(2), "\nnew\n");
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(1), buf.begin(1) + 1).at(0)).find("variable.other") == std::string::npos);
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(3), buf.begin(3) + 1).at(0)).find("entity.name.type") != std::string::npos);
+
+	buf.set_semantic_scopes({ { buf.begin(1), buf.eol(1), "variable.other" }, { buf.begin(3), buf.eol(3), "entity.name.type" } });
+	buf.replace(buf.eol(1), buf.begin(2), "");
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(1), buf.begin(1) + 1).at(0)).find("variable.other") == std::string::npos);
+	OAK_ASSERT(to_s(buf.scopes(buf.begin(2), buf.begin(2) + 1).at(0)).find("entity.name.type") != std::string::npos);
+}
+
 void test_scopes ()
 {
 	ng::buffer_t buf;

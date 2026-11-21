@@ -7,6 +7,53 @@
 
 - (void)lspComplete:(id)sender
 {
+	[self invalidateLSPCompletionRequest];
+	[self requestLSPCompletionAutomatically:NO];
+}
+
+- (void)invalidateLSPCompletionRequest
+{
+	[_lspCompletionTimer invalidate];
+	_lspCompletionTimer = nil;
+	++_lspCompletionGeneration;
+}
+
+- (void)scheduleAutomaticLSPCompletionForText:(NSString*)text
+{
+	[self invalidateLSPCompletionRequest];
+	if(!documentView || !self.window || self.window.firstResponder != self || !self.document.path ||
+		self.choiceMenu || [self hasMarkedText] ||
+		documentView->ranges().size() != 1 || !documentView->ranges().last().empty() || text.length != 1)
+		return;
+
+	unichar ch = [text characterAtIndex:0];
+	if(!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+	     (ch >= '0' && ch <= '9') || ch == '_' || ch == '.'))
+		return;
+
+	OakDocument* doc = self.document;
+	if(![[LSPManager sharedManager] serverSupportsCompletionsForDocument:doc])
+		return;
+
+	size_t caret = documentView->ranges().last().last.index;
+	size_t revision = documentView->revision();
+	NSUInteger generation = _lspCompletionGeneration;
+	__weak OakTextView* weakSelf = self;
+	_lspCompletionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:NO block:^(NSTimer*) {
+		OakTextView* view = weakSelf;
+		if(!view || view->_lspCompletionGeneration != generation || view.document != doc ||
+			view.window.firstResponder != view || !view->documentView ||
+			view->documentView->revision() != revision || view->documentView->ranges().size() != 1 ||
+			!view->documentView->ranges().last().empty() ||
+			view->documentView->ranges().last().last.index != caret || [view hasMarkedText])
+			return;
+		view->_lspCompletionTimer = nil;
+		[view requestLSPCompletionAutomatically:YES];
+	}];
+}
+
+- (void)requestLSPCompletionAutomatically:(BOOL)automatic
+{
 	if(!documentView)
 		return;
 
@@ -14,7 +61,7 @@
 	if(!doc)
 		return;
 
-	BOOL isExplicitTrigger = !_lspCompletionPopup || ![_lspCompletionPopup isVisible];
+	BOOL isExplicitTrigger = !automatic && ![_lspCompletionPopup isVisible];
 
 	if(![[LSPManager sharedManager] hasClientForDocument:doc])
 	{
@@ -22,8 +69,14 @@
 			[OakNotificationManager.shared showWithMessage:@"No LSP server for this document" type:3];
 		return;
 	}
+	if(automatic && ![[LSPManager sharedManager] serverSupportsCompletionsForDocument:doc])
+		return;
+	if(documentView->ranges().size() != 1 || !documentView->ranges().last().empty())
+		return;
 
 	size_t caret = documentView->ranges().last().last.index;
+	size_t revision = documentView->revision();
+	NSUInteger generation = ++_lspCompletionGeneration;
 	text::pos_t pos = documentView->convert(caret);
 
 	size_t bol = documentView->begin(pos.line);
@@ -43,16 +96,21 @@
 		prefix:prefix
 		completion:^(NSArray<NSDictionary*>* suggestions) {
 			OakTextView* strongSelf = weakSelf;
-			if(!strongSelf)
+			if(!strongSelf || strongSelf.document != doc || strongSelf->_lspCompletionGeneration != generation ||
+				(automatic && strongSelf.window.firstResponder != strongSelf))
 				return;
 
 			// The caret moved while the round-trip was in flight (click, jump, …):
 			// these suggestions belong to the old position, so drop them.
-			if(!strongSelf->documentView || strongSelf->documentView->ranges().last().last.index != caret)
+			if(!strongSelf->documentView || strongSelf->documentView->revision() != revision ||
+				strongSelf->documentView->ranges().size() != 1 || !strongSelf->documentView->ranges().last().empty() ||
+				strongSelf->documentView->ranges().last().last.index != caret)
 				return;
 
 			if(suggestions.count == 0)
 			{
+				if(automatic)
+					[strongSelf->_lspCompletionPopup dismiss];
 				if(isExplicitTrigger)
 					[OakNotificationManager.shared showWithMessage:@"No completions available" type:3];
 				return;
@@ -219,6 +277,7 @@
 
 - (void)completionPopupDidDismiss:(OakCompletionPopup*)popup
 {
+	[self invalidateLSPCompletionRequest];
 	_copilotCompletionActive = NO;
 	_lspFilterPrefix = nil;
 }
@@ -230,6 +289,7 @@
 // handled by re-querying the server, which repositions the popup.
 - (void)dismissCompletionPopupForCaretMove
 {
+	[self invalidateLSPCompletionRequest];
 	if([_lspCompletionPopup isVisible])
 		[_lspCompletionPopup dismiss];
 }

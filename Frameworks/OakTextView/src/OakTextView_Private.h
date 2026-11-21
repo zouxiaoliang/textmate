@@ -328,6 +328,8 @@ struct diagnostic_banner_t
 	OakThemeEnvironment* _lspTheme;
 	NSUInteger _lspInitialPrefixLength;
 	NSString* _lspFilterPrefix;
+	NSTimer* _lspCompletionTimer;
+	NSUInteger _lspCompletionGeneration;
 
 	// = Custom Formatter =
 
@@ -455,6 +457,9 @@ struct diagnostic_banner_t
 
 @interface OakTextView (Completion)
 - (void)lspComplete:(id)sender;
+- (void)scheduleAutomaticLSPCompletionForText:(NSString*)text;
+- (void)requestLSPCompletionAutomatically:(BOOL)automatic;
+- (void)invalidateLSPCompletionRequest;
 - (void)ensureCompletionPopup;
 - (NSPoint)caretPointForCompletionPopup;
 - (void)dismissCompletionPopupForCaretMove;

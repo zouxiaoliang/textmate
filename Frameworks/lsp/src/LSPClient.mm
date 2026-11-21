@@ -877,10 +877,15 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				callback(nil);
 			}
 
-			// RequestCancelled (-32800), ContentModified (-32801), ServerCancelled (-32802) are expected, don't toast
-			if(errCode != -32800 && errCode != -32801 && errCode != -32802)
+			// Some servers return a generic error code for a cancelled request.
+			// Keep it in the log, but don't show an expected cancellation as a failure.
+			std::string errMsg = err.value("message", std::string("unknown error"));
+			NSString* normalizedMessage = [[[NSString stringWithUTF8String:errMsg.c_str()]
+				stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] lowercaseString];
+			BOOL cancelled = [normalizedMessage isEqualToString:@"context canceled"] ||
+				[normalizedMessage isEqualToString:@"context cancelled"];
+			if(errCode != -32800 && errCode != -32801 && errCode != -32802 && !cancelled)
 			{
-				std::string errMsg = err.value("message", std::string("unknown error"));
 				[[NSNotificationCenter defaultCenter] postNotificationName:LSPShowMessageNotification object:self userInfo:@{
 					@"type": @1,
 					@"message": @(errMsg.c_str())
@@ -906,7 +911,7 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 				NSDictionary<NSString*, NSString*>* providers = @{ @"textDocument/definition": @"definitionProvider", @"textDocument/references": @"referencesProvider",
 					@"textDocument/declaration": @"declarationProvider", @"textDocument/typeDefinition": @"typeDefinitionProvider", @"textDocument/implementation": @"implementationProvider",
 					@"textDocument/documentSymbol": @"documentSymbolProvider", @"workspace/symbol": @"workspaceSymbolProvider", @"textDocument/hover": @"hoverProvider",
-					@"textDocument/inlayHint": @"inlayHintProvider" };
+					@"textDocument/inlayHint": @"inlayHintProvider", @"textDocument/completion": @"completionProvider" };
 				BOOL utf16 = !caps.contains("positionEncoding") || caps["positionEncoding"] == "utf-16";
 				for(NSString* method in providers) {
 					auto found = caps.find(providers[method].UTF8String);

@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 #import "../src/LSPSemanticTokens.h"
+#import <lsp/LSPManager.h>
+#import <document/OakDocument Private.h>
 #include <cstdio>
 
 static bool check (bool condition, char const* message)
@@ -32,6 +34,21 @@ int main ()
 		valid &= check(lsp::decode_semantic_tokens(@[ @0, @1 ], types, modifiers, buffer).empty(), "partial token was accepted");
 		valid &= check(lsp::decode_semantic_tokens(@[ @0, @2, @1, @0, @0 ], types, modifiers, buffer).empty(), "split surrogate pair was accepted");
 		valid &= check(lsp::decode_semantic_tokens(@[ @9, @0, @1, @0, @0 ], types, modifiers, buffer).empty(), "out-of-bounds line was accepted");
+
+		OakDocument* doc = [OakDocument documentWithString:@"foo\nbar\n" fileType:@"source.ts" customName:nil];
+		[doc loadModalForWindow:nil completionHandler:nullptr];
+		ng::buffer_t& edited = [doc buffer];
+		edited.set_semantic_scopes({ { 0, 3, "entity.name.function" }, { 4, 7, "variable.other" } });
+		LSPManager* manager = [LSPManager sharedManager];
+		NSMutableSet* openDocuments = [manager valueForKey:@"_openDocuments"];
+		[openDocuments addObject:doc.identifier];
+		edited.insert(1, "X");
+		[manager documentDidChange:doc];
+		valid &= check(to_s(edited.scopes(0, 1).at(0)).find("entity.name.function") == std::string::npos,
+			"edited line retained stale semantic color");
+		valid &= check(to_s(edited.scopes(edited.begin(1), edited.begin(1) + 1).at(0)).find("variable.other") != std::string::npos,
+			"editing one line removed semantic color on another line");
+		[manager documentWillClose:doc];
 		return valid ? 0 : 1;
 	}
 }

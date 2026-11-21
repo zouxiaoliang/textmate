@@ -154,6 +154,38 @@ namespace ng
 		ASSERT_LE(from, to); ASSERT_LE(to, size());
 		_callbacks(&callback_t::will_replace, from, to, buf, len);
 
+		// LSP token positions refer to the old text. Invalidate the edited
+		// lines, but keep the tokens on other lines while the server reparses.
+		bool semanticChanged = false;
+		if(!_semantic_scopes.empty())
+		{
+			size_t firstLine = convert(from).line;
+			size_t invalidFrom = begin(firstLine);
+			size_t invalidTo = end(convert(to).line);
+			std::map<size_t, std::string> updated;
+			for(auto it = _semantic_scopes.begin(); it != _semantic_scopes.end(); ++it)
+			{
+				if(it->second.empty())
+					continue;
+				auto finish = std::next(it);
+				if(finish == _semantic_scopes.end())
+					break;
+				if(finish->first <= invalidFrom)
+				{
+					updated[it->first] = it->second;
+					updated[finish->first] = "";
+				}
+				else if(it->first >= invalidTo)
+				{
+					updated[it->first - (to - from) + len] = it->second;
+					updated[finish->first - (to - from) + len] = "";
+				}
+				else
+					semanticChanged = true;
+			}
+			_semantic_scopes.swap(updated);
+		}
+
 		_storage.erase(from, to);
 		_storage.insert(from, buf, len);
 
@@ -178,6 +210,8 @@ namespace ng
 			hook->replace(this, from, to, len);
 
 		_callbacks(&callback_t::did_replace, from, to, buf, len);
+		if(semanticChanged)
+			did_parse(begin(convert(from).line), end(convert(from + len).line));
 		return from + len;
 	}
 

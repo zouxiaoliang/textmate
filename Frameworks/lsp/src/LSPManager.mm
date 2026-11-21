@@ -328,6 +328,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	NSMutableSet<NSString*>* _clearCacheClients;
 }
 - (void)requestSemanticTokensForDocument:(OakDocument*)document;
+- (void)cancelSemanticTokenRequestForDocument:(OakDocument*)document;
 - (void)clearSemanticTokensForDocument:(OakDocument*)document;
 @end
 
@@ -478,7 +479,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	[client openDocument:document languageId:langId];
 }
 
-- (void)clearSemanticTokensForDocument:(OakDocument*)document
+- (void)cancelSemanticTokenRequestForDocument:(OakDocument*)document
 {
 	NSUUID* docId = document.identifier;
 	NSNumber* request = _semanticTokenRequests[docId];
@@ -487,6 +488,11 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 		[_documentClients[docId] cancelRequest:request.intValue];
 		[_semanticTokenRequests removeObjectForKey:docId];
 	}
+}
+
+- (void)clearSemanticTokensForDocument:(OakDocument*)document
+{
+	[self cancelSemanticTokenRequestForDocument:document];
 	if(document.isLoaded)
 		[document buffer].set_semantic_scopes({});
 }
@@ -547,7 +553,7 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	if(![_openDocuments containsObject:docId])
 		return;
 
-	[self clearSemanticTokensForDocument:document];
+	[self cancelSemanticTokenRequestForDocument:document];
 	[_documentSymbols removeObjectForKey:docId];
 	[_changeTimers[docId] invalidate];
 
@@ -1030,6 +1036,12 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 - (BOOL)hasClientForDocument:(OakDocument*)document
 {
 	return document && _documentClients[document.identifier] != nil;
+}
+
+- (BOOL)serverSupportsCompletionsForDocument:(OakDocument*)document
+{
+	LSPClient* client = document ? _documentClients[document.identifier] : nil;
+	return client && [client supportsLanguageQuery:@"textDocument/completion"];
 }
 
 - (BOOL)serverSupportsInlayHintsForDocument:(OakDocument*)document
