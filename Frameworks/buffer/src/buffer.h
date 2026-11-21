@@ -234,11 +234,18 @@ namespace ng
 		std::string _spelling_language;
 		ns::spelling_tag_t _spelling_tag;
 
+		struct semantic_span_t
+		{
+			size_t length = 0;
+			std::string const* scope = nullptr;
+		};
+		std::set<std::string> _semantic_scope_names;
+
 		detail::storage_t                _storage;
 		indexed_map_t<bool>              _hardlines;
 		indexed_map_t<bool>              _dirty;
 		indexed_map_t<scope::scope_t>    _scopes;
-		std::map<size_t, std::string>   _semantic_scopes;
+		indexed_map_t<semantic_span_t>   _semantic_scopes;
 		indexed_map_t<parse::stack_ptr>  _parser_states;
 
 		std::shared_ptr<spelling_t> _spelling;

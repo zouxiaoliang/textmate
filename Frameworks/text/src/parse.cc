@@ -30,15 +30,23 @@ namespace text
 	std::vector<size_t> soft_breaks (std::string const& str, size_t width, size_t tabSize, size_t prefixSize)
 	{
 		std::vector<size_t> res;
+		auto clusterAt = [&str](size_t offset) -> std::pair<uint32_t, size_t> {
+			uint32_t ch = static_cast<unsigned char>(str[offset]);
+			if(ch < 0x80 && (offset + 1 == str.size() || static_cast<unsigned char>(str[offset + 1]) < 0x80))
+				return { ch, 1 };
+			auto cluster = diacritics::begin_of(str.data() + offset, str.data() + str.size());
+			return { *cluster, static_cast<size_t>(cluster.length()) };
+		};
 
 		size_t col = 0, len = 0, spaceCol = 0, spaceLen = 0;
-		citerate(ch, diacritics::make_range(str.data(), str.data() + str.size()))
+		while(len < str.size())
 		{
+			auto [ch, clusterLength] = clusterAt(len);
 			size_t prevLen = len, prevCol = col;
-			len += ch.length();
-			col += (*ch == '\t' ? tabSize - (col % tabSize) : (text::is_east_asian_width(*ch) ? 2 : 1));
+			len += clusterLength;
+			col += (ch == '\t' ? tabSize - (col % tabSize) : (ch >= 0x80 && text::is_east_asian_width(ch) ? 2 : 1));
 
-			if(*ch == '\n')
+			if(ch == '\n')
 			{
 				col = 0;
 
@@ -64,13 +72,13 @@ namespace text
 
 					if(col > width) // Backtrack if text right of the soft break is still too wide: this can only happen for second line of indented soft wrap where the width is decreased after the first break.
 					{
-						ch = diacritics::make_range(str.data() + spaceLen, str.data() + str.size()).begin();
-						len = spaceLen + ch.length();
-						col = (*ch == '\t' ? tabSize : 1);
+						auto [first, firstLength] = clusterAt(spaceLen);
+						len = spaceLen + firstLength;
+						col = (first == '\t' ? tabSize : 1);
 					}
 				}
 			}
-			else if(*ch == ' ')
+			else if(ch == ' ')
 			{
 				spaceLen = len;
 				spaceCol = col;

@@ -27,8 +27,8 @@ namespace ng
 		void insert (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset);
 		void insert_folded (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset);
 		void erase (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset);
-		void did_update_scopes (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset);
-		void set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints);
+		bool did_update_scopes ();
+		void set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints, ng::buffer_t const& buffer, size_t bufferOffset);
 		bool layout (theme_ptr const& theme, bool softWrap, size_t wrapColumn, ct::metrics_t const& metrics, CGRect visibleRect, ng::buffer_t const& buffer, size_t bufferOffset);
 
 		void draw_background (theme_ptr const& theme, ct::metrics_t const& metrics, ng::context_t const& context, bool isFlipped, CGRect visibleRect, CGColorRef backgroundColor, ng::buffer_t const& buffer, size_t bufferOffset, CGPoint anchor) const;
@@ -46,7 +46,7 @@ namespace ng
 		size_t index_left_of (size_t index, ng::buffer_t const& buffer, size_t bufferOffset) const;
 		size_t index_right_of (size_t index, ng::buffer_t const& buffer, size_t bufferOffset) const;
 
-		size_t softline_count (ct::metrics_t const& metrics, bool softBreaksOnNewline = false) const;
+		size_t softline_count () const;
 		size_t softline_for_index (ng::index_t const& index, ng::buffer_t const& buffer, size_t bufferOffset, size_t softlineOffset, ct::metrics_t const& metrics, bool softBreaksOnNewline = false) const;
 		ng::range_t range_for_softline (size_t softline, ng::buffer_t const& buffer, size_t bufferOffset, size_t softlineOffset, ct::metrics_t const& metrics, bool softBreaksOnNewline = false) const;
 
@@ -59,7 +59,7 @@ namespace ng
 		CGFloat width () const;
 		CGFloat height (ct::metrics_t const& metrics) const;
 
-		bool structural_integrity () const { return true; }
+		bool structural_integrity () const { return _unmaterialized_length == 0 || _nodes.empty(); }
 
 	private:
 		enum node_type_t { kNodeTypeText, kNodeTypeUnprintable, kNodeTypeFolding, kNodeTypeSoftBreak, kNodeTypeNewline, kNodeTypeInlayHint };
@@ -71,7 +71,7 @@ namespace ng
 
 			void insert (size_t i, size_t len);
 			void erase (size_t from, size_t to);
-			void did_update_scopes (size_t from, size_t to);
+			void did_update_scopes ();
 
 			void layout (CGFloat x, size_t tabSize, theme_ptr const& theme, bool softWrap, size_t wrapColumn, ct::metrics_t const& metrics, ng::buffer_t const& buffer, size_t bufferOffset, std::string const& fillStr);
 			void reset_font_metrics (ct::metrics_t const& metrics);
@@ -95,9 +95,12 @@ namespace ng
 
 		std::vector<node_t>::iterator iterator_at (size_t i);
 
+		void materialize (ng::buffer_t const& buffer, size_t bufferOffset);
+		void insert_nodes (size_t pos, size_t len, ng::buffer_t const& buffer, size_t offset);
 		void insert_text (size_t i, size_t len);
 		void insert_unprintable (size_t i, size_t len);
 		void insert_newline (size_t i, size_t len);
+		void set_soft_breaks (std::vector<size_t> const& offsets, CGFloat width);
 
 		struct softline_t
 		{
@@ -115,6 +118,7 @@ namespace ng
 		std::vector<softline_t> softlines (ct::metrics_t const& metrics, bool softBreaksOnNewline = false) const;
 
 		std::vector<node_t> _nodes;
+		size_t _unmaterialized_length = 0;
 		bool _dirty = true;
 	};
 

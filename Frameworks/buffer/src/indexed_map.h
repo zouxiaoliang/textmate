@@ -90,6 +90,12 @@ public:
 	iterator upper_bound (ssize_t key) const { return iterator(_tree, _tree.upper_bound(key, &comp_abs)); }
 	iterator nth (size_t n) const            { return iterator(_tree, _tree.find(n, &comp_nth));          }
 
+	void append (ssize_t pos, _ValT const& value)
+	{
+		ASSERT(empty() || _tree.aggregated().length < pos);
+		_tree.insert(_tree.end(), pos - _tree.aggregated().length, value);
+	}
+
 	void set (ssize_t pos, _ValT const& value)
 	{
 		auto alreadyThere = _tree.find(pos, &comp_abs);

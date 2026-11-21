@@ -83,3 +83,48 @@ void test_inserted_line_shifts_unrelated_hints ()
 	OAK_ASSERT(CGRectGetMinX(layout.rect_at_index(ng::index_t(buffer.begin(2) + 2))) > plainLast);
 	OAK_ASSERT(layout.structural_integrity());
 }
+
+void test_layout_of_edited_offscreen_lines ()
+{
+	ng::buffer_t buffer("first\nsecond\nthird\nfourth\n");
+	theme_ptr theme = parse_theme(bundles::lookup(kMacClassicThemeUUID));
+	ng::layout_t layout(buffer, theme, "Menlo", 12);
+	buffer.replace(buffer.begin(1) + 2, buffer.begin(2) + 2, "\t中\x01");
+	size_t offset = buffer.begin(1) + 7;
+	OAK_ASSERT_EQ(layout.index_at_eol_for(offset).index, buffer.eol(1));
+	OAK_ASSERT(layout.structural_integrity());
+
+	auto line = layout.line_record_for(text::pos_t(1, 0));
+	OAK_ASSERT_EQ(layout.index_at_point(CGPointMake(0, (line.top + line.bottom) / 2)).index, buffer.begin(1));
+	CGRect caret = layout.rect_at_index(offset);
+	OAK_ASSERT_EQ(layout.index_at_point(CGPointMake(CGRectGetMinX(caret), CGRectGetMidY(caret))).index, offset);
+
+	layout.fold(buffer.begin(1) + 1, buffer.begin(2) + 2);
+	OAK_ASSERT_EQ(layout.index_right_of(buffer.begin(1) + 1).index, buffer.begin(2) + 2);
+	layout.unfold(buffer.begin(1) + 1, buffer.begin(2) + 2);
+	OAK_ASSERT(layout.structural_integrity());
+}
+
+void test_soft_wrap_breaks_follow_edits ()
+{
+	std::string input;
+	for(size_t repeat = 0; repeat < 200; ++repeat)
+		input += "abcdefgh ijk\t中lm nopqr ";
+	ng::buffer_t buffer(input.c_str());
+	theme_ptr theme = parse_theme(bundles::lookup(kMacClassicThemeUUID));
+	ng::layout_t layout(buffer, theme, "Menlo", 12, true, false, 18);
+	layout.update_metrics(CGRectMake(0, 0, 300, 200));
+	buffer.insert(3, "XXX");
+	layout.update_metrics(CGRectMake(0, 0, 300, 200));
+	ng::layout_t fresh(buffer, theme, "Menlo", 12, true, false, 18);
+	fresh.update_metrics(CGRectMake(0, 0, 300, 200));
+	OAK_ASSERT_EQ(layout.height(), fresh.height());
+	for(size_t index : { 0, 30, 2200, 3900 })
+	{
+		auto visualLine = fresh.softline_for_index(index);
+		OAK_ASSERT_EQ(layout.softline_for_index(index), visualLine);
+		OAK_ASSERT_EQ(layout.range_for_softline(visualLine).min().index, fresh.range_for_softline(visualLine).min().index);
+		OAK_ASSERT_EQ(layout.range_for_softline(visualLine).max().index, fresh.range_for_softline(visualLine).max().index);
+	}
+	OAK_ASSERT(layout.structural_integrity());
+}

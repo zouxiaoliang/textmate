@@ -214,6 +214,29 @@ void test_semantic_scopes_survive_other_line_edits ()
 	OAK_ASSERT(to_s(buf.scopes(buf.begin(2), buf.begin(2) + 1).at(0)).find("entity.name.type") != std::string::npos);
 }
 
+void test_semantic_scopes_keep_adjacent_and_shifted_ranges ()
+{
+	ng::buffer_t buf("abcdef\nghijkl\nmnopqr");
+	buf.set_semantic_scopes({ { 0, 2, "first" }, { 2, 4, "adjacent" }, { 4, 8, "crossing" },
+	                         { 8, 10, "edited" }, { 14, 16, "last" } });
+	OAK_ASSERT_EQ(to_s(buf.scopes(1, 4).at(0)), "text first");
+	OAK_ASSERT_EQ(to_s(buf.scopes(1, 4).at(1)), "text adjacent");
+	OAK_ASSERT_EQ(to_s(buf.scopes(4, 8).at(0)), "text crossing");
+
+	buf.erase(8, 10);
+	OAK_ASSERT_EQ(to_s(buf.scopes(1, 5).at(0)), "text first");
+	OAK_ASSERT_EQ(to_s(buf.scopes(1, 5).at(1)), "text adjacent");
+	OAK_ASSERT_EQ(to_s(buf.scopes(1, 5).at(3)), "text");
+	OAK_ASSERT_EQ(to_s(buf.scopes(7, 8).at(0)), "text");
+	OAK_ASSERT_EQ(to_s(buf.scopes(12, 14).at(0)), "text last");
+
+	buf.insert(0, "extra\n");
+	OAK_ASSERT_EQ(to_s(buf.scopes(6, 7).at(0)), "text");
+	OAK_ASSERT_EQ(to_s(buf.scopes(18, 20).at(0)), "text last");
+	buf.set_semantic_scopes({});
+	OAK_ASSERT_EQ(to_s(buf.scopes(18, 20).at(0)), "text");
+}
+
 void test_scopes ()
 {
 	ng::buffer_t buf;

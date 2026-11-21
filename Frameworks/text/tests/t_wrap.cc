@@ -41,6 +41,8 @@ void test_soft_breaks ()
 	OAK_ASSERT_EQ(soft_breaks("foo bar xyz"),                 "foo bar ‸xyz"               );
 	OAK_ASSERT_EQ(soft_breaks("foo-bar-xy"),                  "foo-bar-xy"                 );
 	OAK_ASSERT_EQ(soft_breaks("foo-bar-xyz"),                 "foo-bar-xy‸z"               );
+	OAK_ASSERT_EQ(soft_breaks("123456789e\u0301x"),            "123456789e\u0301‸x"          );
+	OAK_ASSERT_EQ(soft_breaks("123456789中"),                 "123456789‸中"               );
 	OAK_ASSERT_EQ(soft_breaks("foo-bar-xyz fud baz\n"),       "foo-bar-xy‸z fud baz\n"     );
 	OAK_ASSERT_EQ(soft_breaks("foo-bar-xyz fud baz xyz"),     "foo-bar-xy‸z fud baz ‸xyz"  );
 	OAK_ASSERT_EQ(soft_breaks("foo bar fud"),                 "foo bar ‸fud"               );

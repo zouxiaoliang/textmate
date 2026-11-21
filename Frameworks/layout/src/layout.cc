@@ -162,7 +162,7 @@ namespace ng
 			std::vector<std::pair<size_t, std::string>> local;
 			for(auto it = _inlay_hints.lower_bound(offset); it != _inlay_hints.end() && it->first <= offset + row->value.length(); ++it)
 				if(row_for_offset(it->first) == row) local.emplace_back(it->first - offset, it->second);
-			row->value.set_inlay_hints(local);
+			row->value.set_inlay_hints(local, _buffer, offset);
 			update_metrics_for_row(row);
 		}
 		_dirty_rects.push_back(OakRectMake(0, 0, width(), height()));
@@ -179,7 +179,7 @@ namespace ng
 		for(size_t offset : affected)
 		{
 			auto row = row_for_offset(offset);
-			row->value.set_inlay_hints({});
+			row->value.set_inlay_hints({}, _buffer, offset);
 			update_row(row);
 		}
 	}
@@ -417,7 +417,10 @@ namespace ng
 		if(clickedY < rowIter->offset._height)
 			return rowIter->offset._length;
 		else if(clickedY < rowIter->offset._height + rowIter->key._height)
+		{
+			const_cast<layout_t*>(this)->update_metrics_for_row(rowIter);
 			return rowIter->value.index_at_point(point, *_metrics, _buffer, rowIter->offset._length, CGPointMake(_margin.left, _margin.top + rowIter->offset._height));
+		}
 		else
 			return rowIter->offset._length + rowIter->key._length;
 	}
@@ -454,7 +457,7 @@ namespace ng
 		rowIter->key._length = rowIter->value.length();
 		rowIter->key._width  = rowIter->value.width();
 		rowIter->key._height = rowIter->value.height(*_metrics);
-		rowIter->key._softlines = rowIter->value.softline_count(*_metrics);
+		rowIter->key._softlines = rowIter->value.softline_count();
 
 		_rows.update_key(rowIter);
 		return oldHeight != rowIter->key._height;
@@ -703,11 +706,16 @@ namespace ng
 
 	void layout_t::did_update_scopes (size_t from, size_t to)
 	{
-		foreach(row, _rows.lower_bound(from, &row_offset_comp), _rows.lower_bound(to, &row_offset_comp))
+		if(from >= to)
+			return;
+		CGRect damage = CGRectNull;
+		foreach(row, row_for_offset(from), _rows.lower_bound(to, &row_offset_comp))
 		{
-			row->value.did_update_scopes(from, to, _buffer, row->offset._length);
-			refresh_line_at_index(row->offset._length, false);
+			if(row->value.did_update_scopes() && _refresh_counter)
+				damage = CGRectUnion(damage, rect_for(row));
 		}
+		if(!CGRectIsNull(damage))
+			_dirty_rects.push_back(full_width(damage));
 	}
 
 	// ============

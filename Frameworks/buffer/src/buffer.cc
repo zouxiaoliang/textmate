@@ -153,37 +153,33 @@ namespace ng
 	{
 		ASSERT_LE(from, to); ASSERT_LE(to, size());
 		_callbacks(&callback_t::will_replace, from, to, buf, len);
+		bool const appending = from == size();
 
 		// LSP token positions refer to the old text. Invalidate the edited
 		// lines, but keep the tokens on other lines while the server reparses.
 		bool semanticChanged = false;
+		size_t semanticFrom = from, semanticTo = from + len;
 		if(!_semantic_scopes.empty())
 		{
-			size_t firstLine = convert(from).line;
-			size_t invalidFrom = begin(firstLine);
+			size_t invalidFrom = begin(convert(from).line);
 			size_t invalidTo = end(convert(to).line);
-			std::map<size_t, std::string> updated;
-			for(auto it = _semantic_scopes.begin(); it != _semantic_scopes.end(); ++it)
+			auto first = _semantic_scopes.lower_bound(invalidFrom);
+			if(first != _semantic_scopes.begin())
 			{
-				if(it->second.empty())
-					continue;
-				auto finish = std::next(it);
-				if(finish == _semantic_scopes.end())
-					break;
-				if(finish->first <= invalidFrom)
-				{
-					updated[it->first] = it->second;
-					updated[finish->first] = "";
-				}
-				else if(it->first >= invalidTo)
-				{
-					updated[it->first - (to - from) + len] = it->second;
-					updated[finish->first - (to - from) + len] = "";
-				}
-				else
-					semanticChanged = true;
+				auto previous = std::prev(first);
+				if(invalidFrom < previous->first + previous->second.length)
+					first = previous;
 			}
-			_semantic_scopes.swap(updated);
+			auto last = _semantic_scopes.lower_bound(invalidTo);
+			semanticChanged = first != last;
+			if(semanticChanged)
+			{
+				auto finalSpan = std::prev(last);
+				semanticFrom = std::min<size_t>(from, first->first);
+				semanticTo = std::max(to, finalSpan->first + finalSpan->second.length) - (to - from) + len;
+			}
+			_semantic_scopes.remove(first, last);
+			_semantic_scopes.replace(from, to, len, false);
 		}
 
 		_storage.erase(from, to);
@@ -203,7 +199,12 @@ namespace ng
 		for(size_t i = 0; i < len; ++i)
 		{
 			if(buf[i] == '\n')
-				_hardlines.set(from + i, true);
+			{
+				if(appending)
+					_hardlines.append(from + i, true);
+				else
+					_hardlines.set(from + i, true);
+			}
 		}
 
 		for(auto const& hook : _meta_data)
@@ -211,7 +212,7 @@ namespace ng
 
 		_callbacks(&callback_t::did_replace, from, to, buf, len);
 		if(semanticChanged)
-			did_parse(begin(convert(from).line), end(convert(from + len).line));
+			_callbacks(&callback_t::did_parse, begin(convert(semanticFrom).line), end(convert(semanticTo).line));
 		return from + len;
 	}
 
@@ -294,18 +295,27 @@ namespace ng
 		// bundle commands, symbols, indentation, and scope-sensitive settings.
 		if(!_semantic_scopes.empty() && from < to)
 		{
-			std::map<size_t, std::string> semantic;
-			auto active = _semantic_scopes.upper_bound(from);
+			std::map<size_t, std::string const*> semantic;
+			auto active = _semantic_scopes.lower_bound(from);
 			if(active != _semantic_scopes.begin())
-				semantic.emplace(0, std::prev(active)->second);
+			{
+				auto previous = std::prev(active);
+				if(from < previous->first + previous->second.length)
+					active = previous;
+			}
 			for(auto it = active; it != _semantic_scopes.end() && it->first < to; ++it)
-				semantic.emplace(it->first - from, it->second);
+			{
+				semantic[std::max<size_t>(it->first, from) - from] = it->second.scope;
+				size_t finish = it->first + it->second.length;
+				if(finish < to)
+					semantic[finish - from] = nullptr;
+			}
 
 			std::map<size_t, scope::scope_t> combined;
 			auto lexical = scopes.begin();
 			auto nextLexical = std::next(lexical);
 			auto nextSemantic = semantic.begin();
-			std::string currentSemantic;
+			std::string const* currentSemantic = nullptr;
 			for(size_t offset = 0; offset < to - from; )
 			{
 				if(nextLexical != scopes.end() && nextLexical->first == offset)
@@ -319,8 +329,8 @@ namespace ng
 					++nextSemantic;
 				}
 				scope::scope_t value = lexical->second;
-				if(!currentSemantic.empty())
-					value.push_scope(currentSemantic);
+				if(currentSemantic)
+					value.push_scope(*currentSemantic);
 				combined.emplace(offset, value);
 				size_t next = to - from;
 				if(nextLexical != scopes.end()) next = std::min(next, nextLexical->first);
@@ -373,20 +383,30 @@ namespace ng
 	{
 		if(_semantic_scopes.empty() && ranges.empty())
 			return;
-		std::map<size_t, std::string> updated;
+		std::set<std::string> names;
+		indexed_map_t<semantic_span_t> updated;
+		auto previous = _semantic_scopes.begin();
+		bool unchanged = true;
 		size_t previousEnd = 0;
 		for(auto const& range : ranges)
 		{
 			if(range.from >= range.to || range.to > size() || range.from < previousEnd || range.scope.empty())
 				continue;
-			updated[range.from] = range.scope;
-			updated[range.to] = "";
+			size_t length = range.to - range.from;
+			if(unchanged)
+			{
+				unchanged = previous != _semantic_scopes.end() && previous->first == range.from && previous->second.length == length && *previous->second.scope == range.scope;
+				if(unchanged)
+					++previous;
+			}
+			updated.append(range.from, { length, &*names.insert(range.scope).first });
 			previousEnd = range.to;
 		}
-		if(updated == _semantic_scopes)
+		if(unchanged && previous == _semantic_scopes.end())
 			return;
+		_semantic_scope_names.swap(names);
 		_semantic_scopes.swap(updated);
-		did_parse(0, size());
+		_callbacks(&callback_t::did_parse, 0, size());
 	}
 
 	// =============

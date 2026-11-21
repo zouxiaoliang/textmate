@@ -150,6 +150,9 @@ add_subdirectory(Frameworks/command)
 add_subdirectory(Frameworks/layout)
 add_subdirectory(Frameworks/lsp)
 
+add_executable(large_file_benchmark EXCLUDE_FROM_ALL Testing/large_file_benchmark.cc)
+target_link_libraries(large_file_benchmark PRIVATE layout ${TEXTMATE_DEBUG_LIBS})
+
 # === GUI frameworks ===
 add_subdirectory(Frameworks/OakAppKit)
 add_subdirectory(Frameworks/TMFileReference)

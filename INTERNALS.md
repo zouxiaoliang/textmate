@@ -77,3 +77,18 @@ The `OakTextView.framework` contains the components you work most with when usin
 * `GutterView`: the view left to the text view containing line numbers, folding marks etc.
 * `OTVStatusBar`: the bar below the text view containing e.g. current bundle, symbol etc.
 * `OakDocumentView`: a view that contains as its subviews an `OakTextView`, `GutterView` and `OTVStatusBar` and makes them work together
+
+## Large file benchmarks
+
+Build the optional benchmark in Release mode to measure the document buffer and layout without AddressSanitizer:
+
+```sh
+cmake --preset release
+cmake --build build-release --target large_file_benchmark
+build-release/large_file_benchmark plain 200000
+build-release/large_file_benchmark semantic 200000 16.7
+build-release/large_file_benchmark long-line 1048576
+build-release/large_file_benchmark long-wrap 1048576
+```
+
+The benchmark reports macOS physical memory footprint and the latency of 40 character inserts and deletes, including the layout refresh for a fixed viewport. The optional last argument sets a p95 latency budget in milliseconds and makes the command fail when it is exceeded. The semantic case installs generated spans directly in the buffer. It excludes the language server, file I/O and AppKit event delivery.

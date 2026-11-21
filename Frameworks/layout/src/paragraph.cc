@@ -94,7 +94,7 @@ namespace ng
 		_line.reset();
 	}
 
-	void paragraph_t::node_t::did_update_scopes (size_t from, size_t to)
+	void paragraph_t::node_t::did_update_scopes ()
 	{
 		_line.reset();
 	}
@@ -128,6 +128,8 @@ namespace ng
 
 			case kNodeTypeSoftBreak:
 			{
+				if(fillStr.empty())
+					break;
 				scope::context_t const context = buffer.scope(bufferOffset);
 				scope::scope_t scope = shared_prefix(context.left, context.right);
 				scope.push_scope("deco.indented-wrap");
@@ -239,6 +241,21 @@ namespace ng
 
 	void paragraph_t::insert (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
+		if(_nodes.empty())
+			_unmaterialized_length += len;
+		else
+			insert_nodes(pos, len, buffer, pos - bufferOffset);
+		_dirty = true;
+	}
+
+	void paragraph_t::materialize (ng::buffer_t const& buffer, size_t bufferOffset)
+	{
+		if(_unmaterialized_length)
+			insert_nodes(bufferOffset, std::exchange(_unmaterialized_length, 0), buffer, 0);
+	}
+
+	void paragraph_t::insert_nodes (size_t pos, size_t len, ng::buffer_t const& buffer, size_t offset)
+	{
 		std::string const str = buffer.substr(pos, pos + len);
 		size_t const size = str.size();
 
@@ -257,13 +274,13 @@ namespace ng
 
 				if(i - from >= kCTLineMaxSize)
 				{
-					insert_text(pos - bufferOffset + from, i - from);
+					insert_text(offset + from, i - from);
 					from = i;
 				}
 
 				while(j - from >= kCTLineMaxSize)
 				{
-					insert_text(pos - bufferOffset + from, kCTLineMaxSize);
+					insert_text(offset + from, kCTLineMaxSize);
 					from += kCTLineMaxSize;
 				}
 
@@ -278,18 +295,18 @@ namespace ng
 				if(ch == '\n' || representation_for(ch) != NULL_STR)
 				{
 					if(from != i)
-						insert_text(pos - bufferOffset + from, i - from);
+						insert_text(offset + from, i - from);
 
 					if(ch == '\n')
-						insert_newline(pos - bufferOffset + i, chLen);
+						insert_newline(offset + i, chLen);
 					else
-						insert_unprintable(pos - bufferOffset + i, chLen);
+						insert_unprintable(offset + i, chLen);
 
 					from = i + chLen;
 				}
 				else if(i - from >= kCTLineMaxSize)
 				{
-					insert_text(pos - bufferOffset + from, i - from);
+					insert_text(offset + from, i - from);
 					from = i;
 				}
 				i += chLen;
@@ -297,20 +314,34 @@ namespace ng
 		}
 
 		if(from != size)
-			insert_text(pos - bufferOffset + from, size - from);
-
-		_dirty = true;
+			insert_text(offset + from, size - from);
 	}
 
 	void paragraph_t::insert_folded (size_t pos, size_t len, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
-		_nodes.insert(iterator_at(pos - bufferOffset), node_t(kNodeTypeFolding, len));
+		size_t offset = pos - bufferOffset;
+		if(_nodes.empty())
+		{
+			ASSERT_LE(offset, _unmaterialized_length);
+			size_t suffix = std::exchange(_unmaterialized_length, 0) - offset;
+			insert_nodes(bufferOffset, offset, buffer, 0);
+			_nodes.emplace_back(kNodeTypeFolding, len);
+			insert_nodes(pos + len, suffix, buffer, offset + len);
+		}
+		else
+			_nodes.insert(iterator_at(offset), node_t(kNodeTypeFolding, len));
 		_dirty = true;
 	}
 
 	void paragraph_t::erase (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
 		ASSERT_LE(bufferOffset, from); ASSERT_LE(to, bufferOffset + length());
+		if(_nodes.empty())
+		{
+			_unmaterialized_length -= to - from;
+			_dirty = true;
+			return;
+		}
 
 		size_t i = bufferOffset;
 		for(auto& node : _nodes)
@@ -340,19 +371,20 @@ namespace ng
 		_dirty = true;
 	}
 
-	void paragraph_t::did_update_scopes (size_t from, size_t to, ng::buffer_t const& buffer, size_t bufferOffset)
+	bool paragraph_t::did_update_scopes ()
 	{
-		size_t i = bufferOffset;
+		if(_nodes.empty())
+			return false;
 		for(auto& node : _nodes)
-		{
-			node.did_update_scopes(from - i, to - i);
-			i += node.length();
-		}
+			node.did_update_scopes();
 		_dirty = true;
+		return true;
 	}
 
-	void paragraph_t::set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints)
+	void paragraph_t::set_inlay_hints (std::vector<std::pair<size_t, std::string>> const& hints, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
+		if(!hints.empty())
+			materialize(buffer, bufferOffset);
 		_nodes.erase(std::remove_if(_nodes.begin(), _nodes.end(), [](node_t const& node) {
 			return node.type() == kNodeTypeInlayHint;
 		}), _nodes.end());
@@ -368,24 +400,70 @@ namespace ng
 		_dirty = true;
 	}
 
+	void paragraph_t::set_soft_breaks (std::vector<size_t> const& offsets, CGFloat width)
+	{
+		if(offsets.empty())
+		{
+			std::erase_if(_nodes, [](node_t const& node) { return node.type() == kNodeTypeSoftBreak; });
+			return;
+		}
+
+		std::vector<node_t> wrapped;
+		wrapped.reserve(std::max(_nodes.size(), 2 * offsets.size()));
+		auto next = offsets.begin();
+		auto appendBreak = [&] {
+			wrapped.emplace_back(kNodeTypeSoftBreak, 0, width);
+			++next;
+		};
+		auto appendText = [&](size_t length, node_t* original) {
+			if(!wrapped.empty() && wrapped.back().type() == kNodeTypeText && wrapped.back().length() + length <= kCTLineMaxSize)
+				wrapped.back().insert(wrapped.back().length(), length);
+			else if(original)
+				wrapped.push_back(std::move(*original));
+			else
+				wrapped.emplace_back(kNodeTypeText, length);
+		};
+
+		size_t offset = 0;
+		for(auto& node : _nodes)
+		{
+			if(node.type() == kNodeTypeSoftBreak)
+				continue;
+			while(next != offsets.end() && *next == offset)
+				appendBreak();
+
+			size_t end = offset + node.length();
+			if(node.type() == kNodeTypeText)
+			{
+				size_t start = offset;
+				while(next != offsets.end() && *next < end)
+				{
+					if(start < *next)
+						appendText(*next - start, nullptr);
+					start = *next;
+					appendBreak();
+				}
+				appendText(end - start, start == offset ? &node : nullptr);
+			}
+			else
+				wrapped.push_back(std::move(node));
+			offset = end;
+		}
+		while(next != offsets.end() && *next == offset)
+			appendBreak();
+		ASSERT(next == offsets.end());
+		_nodes.swap(wrapped);
+	}
+
 	bool paragraph_t::layout (theme_ptr const& theme, bool softWrap, size_t wrapColumn, ct::metrics_t const& metrics, CGRect visibleRect, ng::buffer_t const& buffer, size_t bufferOffset)
 	{
 		if(!_dirty)
 			return false;
-
-		std::vector<node_t> newNodes;
-		bool hasFoldings = false;
-		for(auto const& node : _nodes)
-		{
-			if(node.type() != kNodeTypeSoftBreak)
-				newNodes.push_back(node);
-			hasFoldings = hasFoldings || node.type() == kNodeTypeFolding;
-		}
-		_nodes.swap(newNodes);
+		materialize(buffer, bufferOffset);
 
 		size_t const tabSize = buffer.indent().tab_size();
 		std::string fillStr = NULL_STR;
-		if(!hasFoldings && softWrap)
+		if(softWrap && std::none_of(_nodes.begin(), _nodes.end(), [](node_t const& node) { return node.type() == kNodeTypeFolding; }))
 		{
 			fillStr = "";
 			size_t fillStrWidth = 0;
@@ -421,9 +499,10 @@ namespace ng
 				}
 			}
 
-			for(auto const& offset : text::soft_breaks(str, wrapColumn, tabSize, fillStrWidth))
-				_nodes.insert(iterator_at(offset), node_t(kNodeTypeSoftBreak, 0, fillStrWidth * metrics.column_width()));
+			set_soft_breaks(text::soft_breaks(str, wrapColumn, tabSize, fillStrWidth), fillStrWidth * metrics.column_width());
 		}
+		else
+			set_soft_breaks({}, 0);
 
 		CGFloat x = 0;
 		size_t i = bufferOffset;
@@ -476,9 +555,9 @@ namespace ng
 		return softlines;
 	}
 
-	size_t paragraph_t::softline_count (ct::metrics_t const& metrics, bool softBreaksOnNewline) const
+	size_t paragraph_t::softline_count () const
 	{
-		return softlines(metrics, softBreaksOnNewline).size();
+		return 1 + std::count_if(_nodes.begin(), _nodes.end(), [](node_t const& node) { return node.type() == kNodeTypeSoftBreak; });
 	}
 
 	size_t paragraph_t::softline_for_index (ng::index_t const& index, ng::buffer_t const& buffer, size_t bufferOffset, size_t softlineOffset, ct::metrics_t const& metrics, bool softBreaksOnNewline) const
@@ -572,7 +651,7 @@ namespace ng
 
 	size_t paragraph_t::length () const
 	{
-		size_t res = 0;
+		size_t res = _unmaterialized_length;
 		for(auto const& node : _nodes)
 			res += node.length();
 		return res;
@@ -593,6 +672,8 @@ namespace ng
 
 	CGFloat paragraph_t::height (ct::metrics_t const& metrics) const
 	{
+		if(_nodes.empty())
+			return metrics.line_height();
 		auto lines = softlines(metrics);
 		return lines.back().y + lines.back().height;
 	}
@@ -734,6 +815,8 @@ namespace ng
 
 	size_t paragraph_t::eol (size_t index, ng::buffer_t const& buffer, size_t bufferOffset) const
 	{
+		if(_nodes.empty())
+			return std::min(bufferOffset + length(), buffer.eol(buffer.convert(bufferOffset).line));
 		size_t i = bufferOffset;
 		for(auto const& node : _nodes)
 		{
