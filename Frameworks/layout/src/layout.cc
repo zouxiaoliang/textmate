@@ -41,7 +41,14 @@ namespace ng
 		struct parser_callback_t : ng::callback_t
 		{
 			parser_callback_t (layout_t& layout) : layout(layout) { }
-			void did_replace (size_t from, size_t to, char const* buf, size_t len) { layout.clear_inlay_hints_for_edit(); layout.did_erase(from, to); layout.did_insert(from, from + len); }
+			void did_replace (size_t from, size_t to, char const* buf, size_t len)
+			{
+				auto retained = layout.retained_inlay_hints_after_edit(from, to, len);
+				layout.clear_inlay_hints_for_edit();
+				layout.did_erase(from, to);
+				layout.did_insert(from, from + len);
+				layout.set_inlay_hints(retained);
+			}
 
 		private:
 			layout_t& layout;
@@ -175,6 +182,19 @@ namespace ng
 			row->value.set_inlay_hints({});
 			update_row(row);
 		}
+	}
+
+	std::map<size_t, std::string> layout_t::retained_inlay_hints_after_edit (size_t from, size_t to, size_t length) const
+	{
+		std::map<size_t, std::string> retained;
+		for(auto const& hint : _inlay_hints)
+		{
+			if(hint.first < from)
+				retained.emplace(hint.first, hint.second);
+			else if(hint.first > to || (from < to && hint.first == to))
+				retained.emplace(hint.first - (to - from) + length, hint.second);
+		}
+		return retained;
 	}
 
 	// ======================

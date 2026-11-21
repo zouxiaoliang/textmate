@@ -519,7 +519,7 @@ NSNotificationName const OakTextViewThemeDidChangeNotification = @"OakTextViewTh
 				NSAccessibilityPostNotification(view, NSAccessibilityValueChangedNotification);
 				OakDocument* doc = view.document;
 				dispatch_async(dispatch_get_main_queue(), ^{
-					if(view.document == doc) { [view clearInlayHints]; [view scheduleInlayHints]; }
+					if(view.document == doc) { [view invalidateInlayHintRequest]; [view scheduleInlayHints]; }
 				});
 			}
 

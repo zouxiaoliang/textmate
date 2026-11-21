@@ -225,6 +225,7 @@ struct document_view_t : ng::buffer_api_t
 	void set_drop_marker (ng::index_t dropMarkerIndex) { _layout->set_drop_marker(dropMarkerIndex); }
 	void set_viewport (CGRect rect) { _layout->set_viewport_size(rect.size); }
 	void set_inlay_hints (std::map<size_t, std::string> const& hints) { _layout->set_inlay_hints(hints); }
+	std::map<size_t, std::string> const& inlay_hints () const { return _layout->inlay_hints(); }
 	bool draw_wrap_column () const { return _layout->draw_wrap_column(); }
 	bool draw_indent_guides () const { return _layout->draw_indent_guides(); }
 	void update_metrics (CGRect visibleRect) { _layout->update_metrics(visibleRect); }
@@ -473,6 +474,7 @@ struct diagnostic_banner_t
 @interface OakTextView (InlayHints)
 - (void)scheduleInlayHints;
 - (void)clearInlayHints;
+- (void)invalidateInlayHintRequest;
 - (void)refreshInlayHints:(NSNotification*)notification;
 @end
 

@@ -59,6 +59,7 @@ namespace ng
 		void set_drop_marker (ng::index_t dropMarkerIndex);
 		void set_viewport_size (CGSize size);
 		void set_inlay_hints (std::map<size_t, std::string> const& hints);
+		std::map<size_t, std::string> const& inlay_hints () const { return _inlay_hints; }
 
 		bool draw_wrap_column () const          { return _draw_wrap_column; }
 		bool draw_indent_guides () const        { return _draw_indent_guides; }
@@ -152,6 +153,7 @@ namespace ng
 		void did_insert (size_t first, size_t last);
 		void did_erase (size_t from, size_t to);
 		void clear_inlay_hints_for_edit ();
+		std::map<size_t, std::string> retained_inlay_hints_after_edit (size_t from, size_t to, size_t length) const;
 
 		void setup_font_metrics ();
 		void clear_text_widths ();

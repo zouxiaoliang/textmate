@@ -1,13 +1,14 @@
 #import <Cocoa/Cocoa.h>
 #import "../src/OakTextView_Private.h"
 #import <lsp/LSPManager.h>
+#import <document/OakDocument Private.h>
 
 int main ()
 {
 	@autoreleasepool
 	{
 		OakTextView* view = [[OakTextView alloc] initWithFrame:NSMakeRect(0, 0, 500, 200)];
-		OakDocument* document = [OakDocument documentWithString:@"f(1, 2)\n" fileType:@"source.c" customName:nil];
+		OakDocument* document = [OakDocument documentWithString:@"f(1, 2)\ng(3)\n" fileType:@"source.c" customName:nil];
 		[document loadModalForWindow:nil completionHandler:nullptr];
 		view.document = document;
 		if(!view->documentView)
@@ -33,8 +34,17 @@ int main ()
 			fprintf(stderr, "FAIL: refreshing hints removed them before the server replied (%.1f -> %.1f)\n", withHint, after);
 			return 1;
 		}
+		ng::buffer_t& buffer = [document buffer];
+		buffer.replace(buffer.begin(1) + 1, buffer.begin(1) + 1, "XX");
+		CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+		after = CGRectGetMinX(view->documentView->rect_at_index(ng::index_t(2)));
+		if(after != withHint)
+		{
+			fprintf(stderr, "FAIL: editing another line removed inlay hint (%.1f -> %.1f)\n", withHint, after);
+			return 1;
+		}
 		view.document = nil;
-		printf("PASS: reselecting and refreshing preserve visible inlay hints\n");
+		printf("PASS: reselecting, refreshing, and unrelated edits preserve hints\n");
 	}
 	return 0;
 }

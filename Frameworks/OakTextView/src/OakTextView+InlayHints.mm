@@ -100,7 +100,9 @@
 				return;
 			}
 
-			std::map<size_t, std::string> hints;
+			std::map<size_t, std::string> hints = target->documentView->inlay_hints();
+			hints.erase(hints.lower_bound(target->documentView->begin(startLine)),
+			            hints.upper_bound(target->documentView->eol(endLine)));
 			for(id item in (NSArray*)result)
 			{
 				if(![item isKindOfClass:[NSDictionary class]]) continue;
