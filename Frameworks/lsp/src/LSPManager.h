@@ -44,6 +44,8 @@ extern NSString* const LSPInlayHintsRefreshNotification; // object: the document
 - (NSArray*)cachedDocumentSymbolsForDocument:(OakDocument*)document;
 - (dispatch_block_t)requestDocumentSymbolsForDocument:(OakDocument*)document completion:(void(^)(NSArray* symbols))callback;
 - (BOOL)hasClientForDocument:(OakDocument*)document;
+- (BOOL)isServerReadyForDocument:(OakDocument*)document;
+- (BOOL)serverSupportsLanguageQuery:(NSString*)method forDocument:(OakDocument*)document;
 - (BOOL)serverSupportsCompletionsForDocument:(OakDocument*)document;
 - (BOOL)serverSupportsInlayHintsForDocument:(OakDocument*)document;
 - (NSDictionary<NSString*, NSNumber*>*)diagnosticCountsForDocument:(OakDocument*)document;

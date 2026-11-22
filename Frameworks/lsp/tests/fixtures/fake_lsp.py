@@ -196,6 +196,26 @@ class FakeLSP:
 			position = msg.get("params", {}).get("position", {})
 			valid = position.get("character") == 2 and position.get("line") == 0
 			self.set_verdict("PASS" if valid else "FAIL", "completion requested after two keystrokes" if valid else "premature or misplaced completion request")
+		elif self.scenario == "f12_context_menu" and method in (
+			"textDocument/definition", "textDocument/rangeFormatting", "textDocument/formatting"
+		):
+			params = msg.get("params", {})
+			result = None
+			if self.uri and params.get("textDocument", {}).get("uri") == self.uri:
+				if method == "textDocument/definition" and params.get("position") == {"line": 1, "character": 9}:
+					target = {"line": 0, "character": 1}
+					result = {"uri": self.uri, "range": {"start": target, "end": target}}
+				elif method == "textDocument/rangeFormatting":
+					selected = {"start": {"line": 1, "character": 7}, "end": {"line": 1, "character": 13}}
+					if params.get("range") == selected:
+						result = [{"range": selected, "newText": "SAMPLE"}]
+				elif method == "textDocument/formatting":
+					result = [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}, "newText": "ALPHA"}]
+			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
+			if result is None:
+				self.set_verdict("FAIL", "%s received unexpected params %r" % (method, params))
+			elif method == "textDocument/formatting":
+				self.set_verdict("PASS", "definition and formatting commands dispatched from the editor context menu")
 		elif method == "shutdown":
 			self.send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
 		else:
@@ -260,7 +280,7 @@ class FakeLSP:
 			# here keeps the fake realistic for mixed push/pull servers.
 			"textDocument": {"publishDiagnostics": {"dynamicRegistration": False}},
 		}
-		if self.scenario != "f7_no_provider":
+		if self.scenario not in ("f7_no_provider", "f12_context_menu"):
 			caps["diagnosticProvider"] = {
 				"identifier": "fake",
 				"interFileDependencies": False,
@@ -269,6 +289,8 @@ class FakeLSP:
 			caps["inlayHintProvider"] = True
 		if self.scenario == "f11_completion":
 			caps["completionProvider"] = {"triggerCharacters": ["."]}
+		if self.scenario == "f12_context_menu":
+			caps.update(definitionProvider=True, documentFormattingProvider=True, documentRangeFormattingProvider=True)
 		return caps
 
 	def touch_ready(self):

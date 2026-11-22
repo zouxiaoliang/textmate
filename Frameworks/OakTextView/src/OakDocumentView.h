@@ -14,6 +14,10 @@
 - (void)removeAuxiliaryView:(NSView*)aView;
 
 - (IBAction)showSymbolChooser:(id)sender;
+- (IBAction)lspRestartServer:(id)sender;
+- (IBAction)lspReindexWorkspace:(id)sender;
+- (IBAction)lspNextDiagnostic:(id)sender;
+- (IBAction)lspPrevDiagnostic:(id)sender;
 
 - (void)updateCursorLine:(NSUInteger)line;
 - (void)invalidateCodeActionProbe;

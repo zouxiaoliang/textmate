@@ -466,6 +466,7 @@ struct diagnostic_banner_t
 @end
 
 @interface OakTextView (Hover)
+- (IBAction)lspShowHoverInfo:(id)sender;
 - (void)lspRequestHoverAtIndex:(ng::index_t)index;
 - (void)cancelLSPHoverRequest;
 - (void)dismissLSPHoverPanel;
@@ -484,6 +485,10 @@ struct diagnostic_banner_t
 @end
 
 @interface OakTextView (LSP)
+- (NSMenu*)lspContextMenuForRanges:(ng::ranges_t const&)ranges atIndex:(ng::index_t)index;
+- (IBAction)lspGoToDefinition:(id)sender;
+- (IBAction)lspFindReferences:(id)sender;
+- (IBAction)lspRename:(id)sender;
 - (IBAction)lspCodeActions:(id)sender;
 - (void)showCodeActionsMenu:(NSArray<NSDictionary*>*)actions;
 - (void)showCodeActionsMenu:(NSArray<NSDictionary*>*)actions atPoint:(NSPoint)point;
@@ -499,6 +504,7 @@ struct diagnostic_banner_t
 @end
 
 @interface OakTextView (Formatting)
+- (IBAction)lspFormatOnly:(id)sender;
 - (void)performFormatOnSave;
 @end
 

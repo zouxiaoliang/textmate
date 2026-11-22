@@ -2343,7 +2343,7 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 	return menu;
 }
 
-- (NSMenu*)contextMenuForRanges:(ng::ranges_t const&)someRanges
+- (NSMenu*)contextMenuForRanges:(ng::ranges_t const&)someRanges atIndex:(ng::index_t)index
 {
 	static struct { NSString* title; SEL action; } const items[] =
 	{
@@ -2355,6 +2355,8 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 		{ @"Filter Through Command…", @selector(orderFrontRunCommandWindow:)    },
 	};
 
+	// Spelling suggestions may select a word. Capture the original LSP context first.
+	NSMenu* lspMenu = [self lspContextMenuForRanges:someRanges atIndex:index];
 	NSMenu* menu = [self checkSpellingMenuForRanges:someRanges];
 	for(auto const& item : items)
 	{
@@ -2362,17 +2364,23 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 				[menu addItemWithTitle:item.title action:item.action keyEquivalent:@""];
 		else	[menu addItem:[NSMenuItem separatorItem]];
 	}
+	[menu addItem:[NSMenuItem separatorItem]];
+	NSMenuItem* lspItem = [menu addItemWithTitle:lspMenu.title action:nil keyEquivalent:@""];
+	lspItem.submenu = lspMenu;
 	return menu;
 }
 
 - (NSMenu*)menuForEvent:(NSEvent*)anEvent
 {
+	if(!documentView)
+		return [super menuForEvent:anEvent];
+
 	NSPoint point = [self convertPoint:[anEvent locationInWindow] fromView:nil];
 	ng::index_t index = documentView->index_at_point(point);
 	bool clickInSelection = false;
 	for(auto const& range : documentView->ranges())
 		clickInSelection = clickInSelection || range.min() <= index && index <= range.max();
-	return [self contextMenuForRanges:(clickInSelection ? documentView->ranges() : index)];
+	return [self contextMenuForRanges:(clickInSelection ? documentView->ranges() : index) atIndex:index];
 }
 
 - (void)showMenu:(NSMenu*)aMenu
@@ -2396,8 +2404,11 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 
 - (void)showContextMenu:(id)sender
 {
-	// Since contextMenuForRanges: may change selection and showMenu: is blocking the event loop, we need to allow for refreshing the display before showing the context menu.
-	[self performSelector:@selector(showMenu:) withObject:[self contextMenuForRanges:documentView->ranges()] afterDelay:0];
+	if(!documentView)
+		return;
+	// Allow spelling changes to refresh before showMenu: starts tracking the menu.
+	auto const& ranges = documentView->ranges();
+	[self performSelector:@selector(showMenu:) withObject:[self contextMenuForRanges:ranges atIndex:ranges.last().last] afterDelay:0];
 }
 
 - (void)contextMenuPerformCorrectWord:(NSMenuItem*)menuItem

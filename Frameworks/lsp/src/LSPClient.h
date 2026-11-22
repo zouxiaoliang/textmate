@@ -42,6 +42,7 @@ extern NSString* const LSPShowMessageRequestNotification;
 @property (nonatomic, readonly) NSArray<NSString*>* executeCommands;
 - (instancetype)initWithCommand:(NSString*)command arguments:(NSArray<NSString*>*)arguments workingDirectory:(NSString*)workingDirectory initOptions:(NSString*)initOptionsJSON;
 - (void)openDocument:(OakDocument*)document languageId:(NSString*)languageId;
+- (BOOL)hasOpenedDocument:(OakDocument*)document;
 - (void)documentDidChange:(OakDocument*)document version:(int)version;
 - (void)documentDidSave:(OakDocument*)document;
 - (void)closeDocument:(OakDocument*)document;

@@ -1361,6 +1361,12 @@ static void extractExtensionsFromGlob (NSString* pattern, NSMutableSet<NSString*
 	[self openDocument:document languageId:languageId retryCount:0];
 }
 
+- (BOOL)hasOpenedDocument:(OakDocument*)document
+{
+	NSString* path = document.path;
+	return path && [_diagnosticOpenURIs containsObject:[NSURL fileURLWithPath:path].absoluteString];
+}
+
 - (void)documentDidChange:(OakDocument*)document version:(int)version
 {
 	NSAssert(NSThread.isMainThread, @"documentDidChange:version: must run on the main thread");

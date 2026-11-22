@@ -1038,10 +1038,23 @@ static std::string detectWorkspaceRoot (std::string const& filePath)
 	return document && _documentClients[document.identifier] != nil;
 }
 
-- (BOOL)serverSupportsCompletionsForDocument:(OakDocument*)document
+- (BOOL)isServerReadyForDocument:(OakDocument*)document
+{
+	if(!document.path)
+		return NO;
+	LSPClient* client = _documentClients[document.identifier];
+	return client.running && client.initialized && [client hasOpenedDocument:document];
+}
+
+- (BOOL)serverSupportsLanguageQuery:(NSString*)method forDocument:(OakDocument*)document
 {
 	LSPClient* client = document ? _documentClients[document.identifier] : nil;
-	return client && [client supportsLanguageQuery:@"textDocument/completion"];
+	return [client supportsLanguageQuery:method];
+}
+
+- (BOOL)serverSupportsCompletionsForDocument:(OakDocument*)document
+{
+	return [self serverSupportsLanguageQuery:@"textDocument/completion" forDocument:document];
 }
 
 - (BOOL)serverSupportsInlayHintsForDocument:(OakDocument*)document

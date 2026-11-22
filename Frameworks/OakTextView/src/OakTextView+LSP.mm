@@ -61,7 +61,112 @@ static NSArray<NSDictionary*>* NormalizeLSPLocations (id raw)
 	return res;
 }
 
+enum class LSPContextPosition { Unchanged, Click, Selection };
+
+@interface OakLSPContextAction : NSObject
+{
+@public
+	__weak OakDocument* document;
+	size_t revision;
+	ng::ranges_t ranges;
+	__weak id target;
+	SEL command;
+}
+@end
+
+@implementation OakLSPContextAction
+@end
+
 @implementation OakTextView (LSP)
+
+- (NSMenu*)lspContextMenuForRanges:(ng::ranges_t const&)ranges atIndex:(ng::index_t)index
+{
+	NSMenu* menu = [[NSMenu alloc] initWithTitle:@"LSP"];
+	menu.autoenablesItems = NO;
+
+	OakDocument* doc = self.document;
+	size_t revision = documentView->revision();
+	LSPManager* lsp = [LSPManager sharedManager];
+	BOOL ready = [lsp isServerReadyForDocument:doc];
+	BOOL hasClient = [lsp hasClientForDocument:doc];
+	auto supports = [&](NSString* method) {
+		return ready && [lsp serverSupportsLanguageQuery:method forDocument:doc];
+	};
+	using Position = LSPContextPosition;
+	auto add = [&](NSString* title, SEL command, BOOL enabled, Position position, id target) {
+		NSMenuItem* item = [menu addItemWithTitle:title action:@selector(performLSPContextMenuAction:) keyEquivalent:@""];
+		item.target = self;
+		item.enabled = enabled && target != nil;
+		if(!item.enabled)
+			return;
+
+		OakLSPContextAction* action = [OakLSPContextAction new];
+		action->document = doc;
+		action->revision = revision;
+		action->target = target;
+		action->command = command;
+		if(position == Position::Click)
+			action->ranges = ng::ranges_t(index);
+		else if(position == Position::Selection)
+			action->ranges = ranges;
+		item.representedObject = action;
+	};
+
+	if(!ready)
+	{
+		NSString* status = hasClient ? @"Language Server Starting…" : @"No Language Server";
+		[menu addItemWithTitle:status action:nil keyEquivalent:@""].enabled = NO;
+		[menu addItem:[NSMenuItem separatorItem]];
+	}
+
+	add(@"Go to Definition", @selector(lspGoToDefinition:), supports(@"textDocument/definition"), Position::Click, self);
+	add(@"Go to Declaration", @selector(lspGoToDeclaration:), supports(@"textDocument/declaration"), Position::Click, self);
+	add(@"Go to Type Definition", @selector(lspGoToTypeDefinition:), supports(@"textDocument/typeDefinition"), Position::Click, self);
+	add(@"Go to Implementation", @selector(lspGoToImplementation:), supports(@"textDocument/implementation"), Position::Click, self);
+	add(@"Find References", @selector(lspFindReferences:), supports(@"textDocument/references"), Position::Click, self);
+	add(@"Show Hover Info", @selector(lspShowHoverInfo:), supports(@"textDocument/hover"), Position::Click, self);
+	add(@"Go to Symbol in Workspace…", @selector(lspShowWorkspaceSymbols:), supports(@"workspace/symbol"), Position::Unchanged, self);
+
+	[menu addItem:[NSMenuItem separatorItem]];
+	BOOL formatSelection = ready && !ranges.last().empty() && [lsp serverSupportsRangeFormattingForDocument:doc];
+	BOOL formatDocument = ready && [lsp serverSupportsFormattingForDocument:doc];
+	add(@"Rename Symbol…", @selector(lspRename:), ready && [lsp serverSupportsRenameForDocument:doc], Position::Click, self);
+	add(@"Code Actions", @selector(lspCodeActions:), ready && [self canRequestCodeActions], Position::Selection, self);
+	add(formatSelection ? @"Format Selection" : @"Format Document", @selector(lspFormatOnly:), formatSelection || formatDocument, Position::Selection, self);
+	add(@"Complete", @selector(lspComplete:), supports(@"textDocument/completion"), Position::Click, self);
+
+	NSView* container = self.enclosingScrollView.superview;
+	OakDocumentView* documentPane = [container isKindOfClass:OakDocumentView.class] ? (OakDocumentView*)container : nil;
+	BOOL hasDiagnostics = documentPane && (documentView->has_marks("error") || documentView->has_marks("warning") || documentView->has_marks("note"));
+	[menu addItem:[NSMenuItem separatorItem]];
+	add(@"Next Diagnostic", @selector(lspNextDiagnostic:), hasDiagnostics, Position::Click, documentPane);
+	add(@"Previous Diagnostic", @selector(lspPrevDiagnostic:), hasDiagnostics, Position::Click, documentPane);
+	add(_diagnosticBannersVisible ? @"Hide Inline Diagnostics" : @"Show Inline Diagnostics", @selector(toggleInlineDiagnostics:), hasClient, Position::Unchanged, self);
+
+	[menu addItem:[NSMenuItem separatorItem]];
+	add(@"Restart Server", @selector(lspRestartServer:), hasClient, Position::Unchanged, documentPane);
+	add(@"Re-index Workspace", @selector(lspReindexWorkspace:), hasClient, Position::Unchanged, documentPane);
+	return menu;
+}
+
+- (void)performLSPContextMenuAction:(NSMenuItem*)item
+{
+	OakLSPContextAction* action = item.representedObject;
+	if(!item.enabled || !action || !documentView || self.document != action->document || documentView->revision() != action->revision)
+		return;
+
+	id target = action->target;
+	if(!target)
+		return;
+
+	[self.window makeFirstResponder:self];
+	if(!action->ranges.empty())
+	{
+		AUTO_REFRESH;
+		documentView->set_ranges(action->ranges);
+	}
+	[NSApp sendAction:action->command to:target from:item];
+}
 
 // R4: Unified lazy accessor for the shared theme environment
 - (OakThemeEnvironment*)lspTheme

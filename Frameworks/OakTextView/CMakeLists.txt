@@ -31,4 +31,13 @@ if(BUILD_TESTING)
   target_compile_definitions(lsp_auto_completion PRIVATE
     LSP_TEST_FIXTURE="${CMAKE_SOURCE_DIR}/Frameworks/lsp/tests/fixtures/fake_lsp.py")
   add_test(NAME lsp_auto_completion COMMAND lsp_auto_completion)
+
+  add_executable(lsp_context_menu tests/lsp_context_menu.mm)
+  target_link_libraries(lsp_context_menu PRIVATE OakTextView ${TEXTMATE_DEBUG_LIBS})
+  if(OakSwiftUI_LIB)
+    target_include_directories(lsp_context_menu PRIVATE "${OakSwiftUI_INCLUDE_DIR}")
+  endif()
+  target_compile_definitions(lsp_context_menu PRIVATE
+    LSP_TEST_FIXTURE="${CMAKE_SOURCE_DIR}/Frameworks/lsp/tests/fixtures/fake_lsp.py")
+  add_test(NAME lsp_context_menu COMMAND lsp_context_menu)
 endif()
