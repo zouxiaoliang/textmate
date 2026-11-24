@@ -80,6 +80,8 @@
 // ==================
 
 - (IBAction)toggleOutline:(id)sender;
+- (IBAction)toggleSourceControl:(id)sender;
+- (IBAction)showGitWorkspace:(id)sender;
 - (IBAction)toggleFileBrowser:(id)sender;
 - (IBAction)revealFileInProject:(id)sender;
 - (IBAction)goToProjectFolder:(id)sender;

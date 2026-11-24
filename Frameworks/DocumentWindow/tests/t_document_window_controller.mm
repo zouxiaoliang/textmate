@@ -1,7 +1,14 @@
 #import <Cocoa/Cocoa.h>
 #import "../src/DocumentWindowController.h"
 #import "../src/EmptyWorkspaceView.h"
+#import "../src/GitDiffView.h"
+#import "../src/GitGraphTracksView.h"
+#import "../src/GitOperationSheet.h"
+#import "../src/GitRevisionView.h"
+#import "../src/GitWorkspaceViewController.h"
+#import "../src/GitWorkspaceData.h"
 #import "../src/ProjectLayoutView.h"
+#import "../src/SourceControlViewController.h"
 #import "../src/TerminalPanelViewController.h"
 #import <FileBrowser/FileBrowserViewController.h>
 #import <FileBrowser/FileItem.h>
@@ -554,6 +561,696 @@ void test_restoring_project_into_empty_sidebar_updates_folder ()
 		[NSFileManager.defaultManager removeItemAtURL:directory error:nil];
 		[DocumentWindowController enableSessionSave];
 	});
+}
+
+void test_source_control_projects_and_outline_are_independent_sidebar_sections ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		DocumentWindowController* controller = [DocumentWindowController new];
+		controller.fileBrowserVisible = YES;
+		[controller toggleOutline:nil];
+		[controller.window setContentSize:NSMakeSize(850, 510)];
+		ProjectLayoutView* layout = [controller valueForKey:@"layoutView"];
+		NSView* project = layout.fileBrowserView;
+		NSView* projectActions = layout.fileBrowserActionsView;
+		NSView* outline = layout.outlineView;
+		NSRect frame = controller.window.frame;
+		[controller toggleSourceControl:nil];
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSView* sourceControl = layout.sourceControlView;
+		NSView* sidebar = project.superview;
+		OAK_ASSERT(controller.fileBrowserVisible && controller.outlineVisible);
+		OAK_ASSERT(sidebar && outline.superview == sidebar && sourceControl.superview == sidebar && projectActions.superview == sidebar);
+		OAK_ASSERT(NSMinY(project.frame) > NSMaxY(sourceControl.frame) && NSMinY(sourceControl.frame) > NSMaxY(outline.frame));
+		OAK_ASSERT(NSWidth(sourceControl.frame) == NSWidth(project.frame) && NSHeight(sourceControl.frame) > 120);
+		OAK_ASSERT(NSEqualRects(controller.window.frame, frame));
+
+		NSButton* sourceHeader = [layout valueForKey:@"sourceControlHeader"];
+		[sourceHeader performClick:nil];
+		OAK_ASSERT(layout.sourceControlCollapsed && !sourceControl.superview);
+		OAK_ASSERT(project.superview == sidebar && outline.superview == sidebar && !layout.fileBrowserCollapsed);
+		NSDictionary* state = ((NSDictionary*(*)(id, SEL, BOOL))objc_msgSend)(controller, @selector(sessionInfoIncludingUntitledDocuments:), YES);
+		DocumentWindowController* restored = [DocumentWindowController new];
+		((void(*)(id, SEL, NSDictionary*, BOOL))objc_msgSend)(restored, @selector(setupControllerForProject:skipMissingFiles:), state, NO);
+		ProjectLayoutView* restoredLayout = [restored valueForKey:@"layoutView"];
+		OAK_ASSERT(restoredLayout.fileBrowserView.superview && restoredLayout.outlineView.superview);
+		OAK_ASSERT(restoredLayout.sourceControlView && !restoredLayout.sourceControlView.superview && restoredLayout.sourceControlCollapsed);
+		[restored close];
+
+		[controller toggleSourceControl:nil];
+		OAK_ASSERT(!layout.sourceControlCollapsed && sourceControl.superview == sidebar);
+		[controller toggleSourceControl:nil];
+		OAK_ASSERT(!layout.sourceControlView && project.superview == sidebar && outline.superview == sidebar);
+		[controller toggleOutline:nil];
+		[controller toggleSourceControl:nil];
+		[controller toggleFileBrowser:nil];
+		OAK_ASSERT(!layout.fileBrowserView && sourceControl.superview == sidebar);
+		[controller toggleFileBrowser:nil];
+		OAK_ASSERT(layout.fileBrowserView == project && sourceControl.superview == sidebar);
+		OAK_ASSERT(NSEqualRects(controller.window.frame, frame));
+		[controller close];
+		[DocumentWindowController enableSessionSave];
+	});
+}
+
+void test_source_control_bulk_stage_and_expand_description ()
+{
+	NSString* directory = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+	NSFileManager* files = NSFileManager.defaultManager;
+	OAK_ASSERT([files createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
+	NSDictionary* init = GitRepositoryCommand(directory, @[@"init", @"--quiet"], YES);
+	OAK_ASSERT(!init[@"error"] && [init[@"status"] intValue] == 0);
+	for(NSString* name in @[@"one.txt", @"two.txt"])
+		OAK_ASSERT([name writeToFile:[directory stringByAppendingPathComponent:name] atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+	__block SourceControlViewController* controller;
+	__block NSWindow* window;
+	__block NSButton* bulk;
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		controller = [SourceControlViewController new];
+		window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 250, 360) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+		window.releasedWhenClosed = NO;
+		window.contentView = controller.view;
+		controller.directory = directory;
+		controller.panelVisible = YES;
+		bulk = [controller valueForKey:@"bulkStage"];
+	});
+	void (^waitForAction)(NSString*) = ^(NSString* title){
+		NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+		while(deadline.timeIntervalSinceNow > 0) {
+			__block BOOL ready;
+			dispatch_sync(dispatch_get_main_queue(), ^{ ready = bulk.enabled && [bulk.title isEqual:title]; });
+			if(ready) return;
+			[NSThread sleepForTimeInterval:0.01];
+		}
+		OAK_ASSERT(false && "Bulk stage action did not update");
+	};
+	waitForAction(@"Stage All");
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSView* description = [controller valueForKey:@"descriptionEditor"];
+		NSTableView* table = [controller valueForKey:@"table"];
+		[window.contentView layoutSubtreeIfNeeded];
+		CGFloat collapsedListHeight = NSHeight(table.enclosingScrollView.frame);
+		OAK_ASSERT(description.hidden);
+		OAK_ASSERT([window makeFirstResponder:[controller valueForKey:@"message"]]);
+		[window.contentView layoutSubtreeIfNeeded];
+		OAK_ASSERT(!description.hidden && NSHeight(table.enclosingScrollView.frame) < collapsedListHeight);
+		[bulk performClick:nil];
+	});
+	waitForAction(@"Unstage All");
+	dispatch_sync(dispatch_get_main_queue(), ^{ [bulk performClick:nil]; });
+	waitForAction(@"Stage All");
+	NSArray* changes = GitRepositoryChanges(ProjectChangesSnapshot(directory, @{}, YES));
+	OAK_ASSERT(changes.count == 2);
+	for(NSDictionary* change in changes) OAK_ASSERT([change[@"code"] isEqual:@"?"]);
+	OAK_ASSERT([[@"one.txt" dataUsingEncoding:NSUTF8StringEncoding] isEqual:[NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"one.txt"]]]);
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		controller.panelVisible = NO;
+		[window close];
+		bulk = nil;
+		window = nil;
+		controller = nil;
+	});
+	OAK_ASSERT([files removeItemAtPath:directory error:nil]);
+}
+
+void test_git_diff_marks_missing_newlines_on_both_sides ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		GitDiffView* diff = [[GitDiffView alloc] initWithFrame:NSMakeRect(0, 0, 748, 420)];
+		diff.syntaxPath = @"package.json.md5";
+		NSString* removed = @"73aa0c3d5a6d202703011ba04e19f184";
+		NSString* added = @"9f29c7013975ecda6dd9f7e14da12e96";
+		NSString* source = [NSString stringWithFormat:@"diff --git a/package.json.md5 b/package.json.md5\n@@ -1 +1 @@\n-%@\n\\ No newline at end of file\n+%@\n\\ No newline at end of file\n", removed, added];
+		[diff showTitle:diff.syntaxPath subtitle:@"" patch:@{@"text": source}];
+		NSTextView* text = [diff valueForKey:@"textView"];
+		NSArray<NSString*>* lines = [text.string componentsSeparatedByString:@"\n"];
+		OAK_ASSERT(([lines isEqual:@[@"1 chunk, 1 insertion, 1 deletion", @"@@ -1 +1 @@", removed, @" No newline at end of file", added, @" No newline at end of file"]]));
+		NSUInteger oldIndex = [text.string rangeOfString:removed].location;
+		NSUInteger newIndex = [text.string rangeOfString:added].location;
+		NSDictionary* old = [text.textStorage attribute:@"TextMateDiffLine" atIndex:oldIndex effectiveRange:NULL];
+		NSDictionary* newLine = [text.textStorage attribute:@"TextMateDiffLine" atIndex:newIndex effectiveRange:NULL];
+		NSDictionary* note = [text.textStorage attribute:@"TextMateDiffLine" atIndex:oldIndex+removed.length+1 effectiveRange:NULL];
+		OAK_ASSERT([old[@"old"] isEqual:@"−1"] && [old[@"new"] isEqual:@"0"]);
+		OAK_ASSERT([newLine[@"old"] isEqual:@""] && [newLine[@"new"] isEqual:@"+1"]);
+		OAK_ASSERT([note[@"old"] isEqual:@""] && [note[@"new"] isEqual:@""]);
+		OAK_ASSERT(GitDiffHunks(source).count == 1 && [GitDiffHunks(source).firstObject containsString:@"\\ No newline at end of file"]);
+	});
+}
+
+void test_git_operation_sheet_keeps_fields_fixed_when_options_expand ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		NSWindow* parent = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 50, 780, 620) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+		parent.releasedWhenClosed = NO;
+		[parent orderFront:nil];
+		GitOperationSheet* form = [[GitOperationSheet alloc] initWithTitle:@"Fetch" detail:@"Fetch changes from the selected remote." helpTopic:@"fetch"];
+		NSPopUpButton* remote = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+		[remote addItemWithTitle:@"origin"];
+		[form addField:remote label:@"Remote:"];
+		NSButton* all = [form addOption:@"Fetch All Remotes" detail:nil];
+		all.state = NSControlStateValueOn;
+		[form setControls:@[remote] enabledWhen:all checked:NO];
+		[form beginOptions];
+		NSButton* prune = [form addOption:@"Prune Obsolete Remote Branches" detail:@"Removes obsolete branches."];
+		[form presentInWindow:parent firstResponder:all accept:^{ OAK_ASSERT(false && "Cancel should not confirm the operation"); }];
+		NSWindow* panel = form.window;
+		OAK_ASSERT(panel && panel.contentView == form && panel.titleVisibility == NSWindowTitleHidden);
+		OAK_ASSERT(!remote.enabled && prune.isHiddenOrHasHiddenAncestor);
+		[all performClick:nil];
+		OAK_ASSERT(remote.enabled);
+		NSRect remoteFrame = remote.frame;
+		CGFloat collapsedHeight = NSHeight(form.frame);
+		NSButton* options = nil;
+		for(NSView* child in form.subviews)
+			if([child isKindOfClass:NSButton.class] && [((NSButton*)child).title isEqual:@"Options"]) options = (NSButton*)child;
+		[options performClick:nil];
+		OAK_ASSERT(!prune.isHiddenOrHasHiddenAncestor && NSEqualRects(remoteFrame, remote.frame));
+		OAK_ASSERT(NSHeight(form.frame) > collapsedHeight);
+		[options performClick:nil];
+		OAK_ASSERT(prune.isHiddenOrHasHiddenAncestor && NSHeight(form.frame) == collapsedHeight);
+		if([parent.sheets containsObject:panel]) [parent endSheet:panel returnCode:NSModalResponseCancel];
+		else [panel orderOut:nil];
+		[parent close];
+	});
+}
+
+void test_git_mode_switch_preserves_editor_and_shows_working_and_history_diffs ()
+{
+	NSFileManager* files = NSFileManager.defaultManager;
+	NSString* fixture = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+	NSString* directory = [fixture stringByAppendingPathComponent:@"Example Project"];
+	OAK_ASSERT([files createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
+	NSString* tracked = [directory stringByAppendingPathComponent:@"README.md"];
+	void (^git)(NSArray*) = ^(NSArray* args){
+		NSArray* config = @[@"-c", @"user.name=Git Workspace Tests", @"-c", @"user.email=git@example.invalid", @"-c", @"commit.gpgsign=false", @"-c", @"core.hooksPath=/dev/null"];
+		NSDictionary* result = GitRepositoryCommand(directory, [config arrayByAddingObjectsFromArray:args], YES);
+		OAK_ASSERT(!result[@"error"] && [result[@"status"] intValue] == 0);
+	};
+	git(@[@"init", @"-qb", @"main"]);
+	git(@[@"config", @"--local", @"user.name", @"Git Workspace Tests"]);
+	git(@[@"config", @"--local", @"user.email", @"git@example.invalid"]);
+	git(@[@"config", @"--local", @"commit.template", @"/dev/null"]);
+	NSMutableArray<NSString*>* initialLines = [NSMutableArray arrayWithObject:@"Initial content"];
+	for(NSUInteger line = 2; line < 49; ++line) [initialLines addObject:[NSString stringWithFormat:@"Line %lu remains unchanged.", (unsigned long)line]];
+	BOOL (^writeReadme)(NSArray<NSString*>*) = ^BOOL(NSArray<NSString*>* lines){
+		return [[[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"] writeToFile:tracked atomically:YES encoding:NSUTF8StringEncoding error:nil];
+	};
+	OAK_ASSERT(writeReadme(initialLines));
+	git(@[@"add", @"README.md"]);
+	NSMutableString* messageBody = [NSMutableString stringWithString:@"Original fixture body\n\n"];
+	for(NSUInteger line = 1; line <= 36; ++line)
+		[messageBody appendFormat:@"Line %lu explains why the source tree changed.\n", (unsigned long)line];
+	git(@[@"commit", @"--date=2025-10-15T12:00:00+00:00", @"-qm", @"Initial commit", @"-m", messageBody]);
+	git(@[@"commit", @"--date=2025-11-12T12:00:00+00:00", @"--allow-empty", @"-qm", @"November update"]);
+	git(@[@"commit", @"--date=2025-11-13T12:00:00+00:00", @"--allow-empty", @"-qm", @"Latest update"]);
+	git(@[@"branch", @"topic/ui"]);
+	git(@[@"tag", @"v1"]);
+	git(@[@"update-ref", @"refs/remotes/origin/main", @"HEAD"]);
+	git(@[@"config", @"remote.origin.url", @"."]);
+	git(@[@"config", @"remote.origin.fetch", @"+refs/heads/*:refs/remotes/origin/*"]);
+	git(@[@"branch", @"--set-upstream-to=origin/main", @"main"]);
+	NSMutableArray<NSString*>* edited = [initialLines mutableCopy];
+	edited[0] = @"Older draft";
+	OAK_ASSERT(writeReadme(edited));
+	git(@[@"stash", @"push", @"-qm", @"Older draft"]);
+	edited[0] = @"Stashed draft";
+	OAK_ASSERT(writeReadme(edited));
+	git(@[@"stash", @"push", @"-qm", @"Stashed draft"]);
+	edited[0] = @"Working copy edit";
+	edited[3] = @"Line 4  remains unchanged.";
+	edited[25] = @"Line 26 has a second edit.";
+	OAK_ASSERT(writeReadme(edited));
+	OAK_ASSERT([files createDirectoryAtPath:[directory stringByAppendingPathComponent:@"notes"] withIntermediateDirectories:NO attributes:nil error:nil]);
+	OAK_ASSERT([@"draft\n" writeToFile:[directory stringByAppendingPathComponent:@"notes/draft.md"] atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+	__block DocumentWindowController* controller;
+	__block GitWorkspaceViewController* workspace;
+	__block NSSegmentedControl* modes;
+	__block OakDocument* document;
+	__block OakTextView* editor;
+	__block NSTableView* changes;
+	__block NSOutlineView* navigation;
+	__block NSTextView* patch;
+	void (^navigate)(NSString*) = ^(NSString* destination){
+		for(NSInteger row = 0; row < navigation.numberOfRows; ++row) {
+			if([[[navigation itemAtRow:row] objectForKey:@"id"] isEqual:destination]) {
+				[navigation selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+				return;
+			}
+		}
+		OAK_ASSERT(false && "Git workspace destination is missing");
+	};
+	void (^checkGitTitleBar)(BOOL) = ^(BOOL windowButtonsVisible){
+		NSWindow* window = controller.window;
+		NSView* content = window.contentView;
+		NSView* chrome = content.superview;
+		[chrome layoutSubtreeIfNeeded];
+		OakTabBarView* bar = (OakTabBarView*)modes.superview;
+		NSRect barFrame = [bar convertRect:bar.bounds toView:content];
+		NSView* items = workspace.titleBarItems;
+		NSView* repositoryItems = [items valueForKey:@"repositoryItems"];
+		NSSplitView* split = [workspace valueForKey:@"split"];
+		NSSearchField* search = [workspace valueForKey:@"search"];
+		OAK_ASSERT(NSWidth(repositoryItems.bounds) > 0);
+		OAK_ASSERT(items.superview == bar && NSMinX(repositoryItems.frame) > NSMaxX(modes.frame));
+		OAK_ASSERT(NSMinX(repositoryItems.frame) == NSMaxX(split.subviews.firstObject.frame));
+		OAK_ASSERT(bar.countOfVisibleTabs == 0 && NSHeight(modes.frame) >= 16 && !modes.isHiddenOrHasHiddenAncestor);
+		NSRect searchFrame = [search convertRect:search.bounds toView:content];
+		OAK_ASSERT(NSContainsRect(barFrame, searchFrame) && NSWidth(searchFrame) >= 105);
+		OAK_ASSERT(fabs(NSMidY(searchFrame) - NSMidY(barFrame)) <= 0.5);
+		OAK_ASSERT(NSMaxY([split convertRect:split.bounds toView:content]) == NSMinY(barFrame));
+		if(windowButtonsVisible)
+		{
+			NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
+			NSRect zoomFrame = [zoom convertRect:zoom.bounds toView:content];
+			OAK_ASSERT(NSMaxX(zoomFrame) < NSMinX(modes.frame) && fabs(NSMidY(zoomFrame) - NSMidY(barFrame)) <= 0.5);
+			for(NSView* control in @[modes, search])
+			{
+				NSPoint point = [control convertPoint:NSMakePoint(NSMidX(control.bounds), NSMidY(control.bounds)) toView:chrome.superview];
+				OAK_ASSERT([[chrome hitTest:point] isDescendantOf:control]);
+			}
+		}
+	};
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		controller = [DocumentWindowController new];
+		controller.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+		controller.defaultProjectPath = directory;
+		[controller.window setContentSize:NSMakeSize(900, 540)];
+		editor = [controller valueForKey:@"textView"];
+		modes = [controller valueForKey:@"workspaceModeControl"];
+		OAK_ASSERT(modes.selectedSegment == 0 && modes.window == controller.window);
+		[(id<FileBrowserDelegate>)controller fileBrowser:nil openURLs:@[[NSURL fileURLWithPath:tracked]]];
+	});
+	void (^waitForUI)(BOOL(^)(void)) = ^(BOOL(^condition)(void)){
+		NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+		while(deadline.timeIntervalSinceNow > 0) {
+			__block BOOL ready;
+			dispatch_sync(dispatch_get_main_queue(), ^{ ready = condition(); });
+			if(ready) return;
+			[NSThread sleepForTimeInterval:0.01];
+		}
+		OAK_ASSERT(false && "Git mode did not update");
+	};
+	waitForUI(^BOOL{ return [controller.selectedDocument.path isEqual:tracked]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		document = controller.selectedDocument;
+		editor.selectionString = @"1:4";
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSWindow* window = controller.window;
+		NSRect windowFrame = window.frame;
+		NSRect controlFrame = modes.frame;
+		modes.selectedSegment = 1;
+		[NSAnimationContext runAnimationGroup:^(NSAnimationContext* context){
+			context.allowsImplicitAnimation = YES;
+			[modes sendAction:modes.action to:modes.target];
+		} completionHandler:nil];
+		workspace = [controller valueForKey:@"gitWorkspaceController"];
+		OAK_ASSERT(workspace.isActive && workspace.view.window == window && controller.window == window);
+		NSMenuItem* wrap = [[NSMenuItem alloc] initWithTitle:@"" action:@selector(toggleSoftWrap:) keyEquivalent:@"w"];
+		OAK_ASSERT([(id<NSMenuItemValidation>)controller validateMenuItem:wrap] && workspace.softWrap == editor.softWrap);
+		OAK_ASSERT([wrap.title isEqual:editor.softWrap ? @"Disable Soft Wrap" : @"Enable Soft Wrap"]);
+		OAK_ASSERT(NSEqualRects(window.frame, windowFrame) && NSMinX(modes.frame) == NSMinX(controlFrame) && NSWidth(controlFrame) > 60);
+		checkGitTitleBar(YES);
+		OAK_ASSERT(editor.isHiddenOrHasHiddenAncestor && !workspace.view.hidden);
+		navigation = [workspace valueForKey:@"navigation"];
+		changes = [[workspace valueForKey:@"workingCopy"] valueForKey:@"table"];
+		patch = [[workspace valueForKey:@"diff"] valueForKey:@"textView"];
+	});
+	waitForUI(^BOOL{ return changes.numberOfRows == 2 && navigation.numberOfRows >= 10 && [[workspace valueForKey:@"stashShortcut"] title].integerValue == 2; });
+	NSMenu* (^rightClickRow)(NSTableView*, NSInteger) = ^NSMenu*(NSTableView* table, NSInteger row){
+		NSRect rect = [table rectOfRow:row];
+		NSPoint point = [table convertPoint:NSMakePoint(NSMidX(rect), NSMidY(rect)) toView:nil];
+		NSEvent* event = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown location:point modifierFlags:0 timestamp:0
+			windowNumber:table.window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:1];
+		NSMenu* menu = [table menuForEvent:event];
+		[menu.delegate menuNeedsUpdate:menu];
+		return menu;
+	};
+	NSMenu* (^rightClickWorkingCopyRow)(NSInteger) = ^NSMenu*(NSInteger row){ return rightClickRow(changes, row); };
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		[changes selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 2)] byExtendingSelection:NO];
+		NSMenu* menu = rightClickWorkingCopyRow(1);
+		OAK_ASSERT(changes.numberOfSelectedRows == 2);
+		OAK_ASSERT([[[workspace valueForKey:@"emptyTitle"] stringValue] isEqual:@"Multiple files selected"]);
+		OAK_ASSERT([menu itemWithTitle:@"Stage 2 Items"].enabled && ![menu itemWithTitle:@"Unstage 2 Items"].enabled);
+		OAK_ASSERT([menu itemWithTitle:@"Untrack 2 Items"].enabled && ![menu itemWithTitle:@"Move…"].enabled);
+		OAK_ASSERT([menu itemWithTitle:@"Snapshot 2 Items…"].enabled && [menu itemWithTitle:@"Compare"].hasSubmenu);
+		[changes selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+		menu = rightClickWorkingCopyRow(1);
+		OAK_ASSERT(changes.selectedRow == 1 && changes.numberOfSelectedRows == 1);
+		NSMenuItem* stage = [menu itemWithTitle:@"Stage"];
+		OAK_ASSERT(stage.enabled && [NSApp sendAction:stage.action to:stage.target from:stage]);
+	});
+	waitForUI(^BOOL{ return [rightClickWorkingCopyRow(1) itemWithTitle:@"Unstage"].enabled; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSMenuItem* unstage = [rightClickWorkingCopyRow(1) itemWithTitle:@"Unstage"];
+		OAK_ASSERT([NSApp sendAction:unstage.action to:unstage.target from:unstage]);
+	});
+	waitForUI(^BOOL{ return [rightClickWorkingCopyRow(1) itemWithTitle:@"Stage"].enabled; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[changes deselectAll:nil];
+		NSSplitView* split = [workspace valueForKey:@"split"];
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSView* chrome = controller.window.contentView.superview;
+		NSBitmapImageRep* image = [chrome bitmapImageRepForCachingDisplayInRect:chrome.bounds];
+		[chrome cacheDisplayInRect:chrome.bounds toBitmapImageRep:image];
+		NSRect modeRegion = [modes convertRect:modes.bounds toView:chrome];
+		// The switch can still respond to hit testing when a repaint covers it.
+		OAK_ASSERT(region_has_ink(image, chrome.bounds.size, NSInsetRect(modeRegion, 2, 2)));
+		OAK_ASSERT([[[workspace valueForKey:@"emptyTitle"] stringValue] isEqual:@"No file selected"]);
+		OAK_ASSERT(split.subviews.count == 3 && NSWidth(split.subviews[0].frame) >= 155 && NSWidth(split.subviews[1].frame) >= 225 && NSWidth(split.subviews[2].frame) >= 265);
+		CGFloat originalDivider = NSMaxX(split.subviews.firstObject.frame);
+		[split setPosition:originalDivider+12 ofDividerAtIndex:0];
+		OAK_ASSERT(NSMaxX(split.subviews.firstObject.frame) > originalDivider);
+		checkGitTitleBar(YES);
+		NSSearchField* search = [workspace valueForKey:@"search"];
+		search.stringValue = @"readme";
+		[search sendAction:search.action to:search.target];
+		OAK_ASSERT(changes.numberOfRows == 1);
+		[changes selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+	});
+	waitForUI(^BOOL{ return [patch.string containsString:@"2 chunks, 3 insertions, 3 deletions"] && [patch.string containsString:@"Line 26 has a second edit."]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[[workspace valueForKey:@"ignoreDiffWhitespace"] performClick:nil];
+		OAK_ASSERT([patch.string containsString:@"2 chunks, 3 insertions, 3 deletions"]);
+	});
+	waitForUI(^BOOL{ return [patch.string containsString:@"2 chunks, 2 insertions, 2 deletions"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[[workspace valueForKey:@"ignoreDiffWhitespace"] performClick:nil];
+		[[workspace valueForKey:@"showCompleteDiff"] performClick:nil];
+	});
+	waitForUI(^BOOL{ return [patch.string containsString:@"1 chunk, 3 insertions, 3 deletions"] && [patch.string containsString:@"Line 48 remains unchanged."]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSPopUpButton* context = [workspace valueForKey:@"diffContext"];
+		OAK_ASSERT(context.selectedTag == 7 && !context.enabled);
+		[[workspace valueForKey:@"showCompleteDiff"] performClick:nil];
+		OAK_ASSERT(context.enabled);
+		[context selectItemWithTag:4];
+		[context sendAction:context.action to:context.target];
+	});
+	waitForUI(^BOOL{ return [patch.string containsString:@"Line 22 remains unchanged."] && ![patch.string containsString:@"Line 21 remains unchanged."]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSView* diff = [workspace valueForKey:@"diff"];
+		NSDictionary<NSNumber*, NSStackView*>* controls = [diff valueForKey:@"chunkControls"];
+		NSButton* stageSecond = (NSButton*)controls[@1].arrangedSubviews.lastObject;
+		OAK_ASSERT(controls.count == 2 && [stageSecond.title isEqual:@"Stage Chunk"]);
+		NSPoint buttonPoint = [stageSecond convertPoint:NSMakePoint(NSMidX(stageSecond.bounds), NSMidY(stageSecond.bounds)) toView:diff.superview];
+		OAK_ASSERT([[diff hitTest:buttonPoint] isDescendantOf:stageSecond]);
+		[stageSecond sendAction:stageSecond.action to:stageSecond.target];
+	});
+	NSDate* stageDeadline = [NSDate dateWithTimeIntervalSinceNow:5];
+	NSString* stagedPatch;
+	do {
+		stagedPatch = GitWorkspaceText(GitRepositoryCommand(directory, @[@"diff", @"--cached"]));
+		if([stagedPatch containsString:@"has a second edit"]) break;
+		[NSThread sleepForTimeInterval:0.01];
+	} while(stageDeadline.timeIntervalSinceNow > 0);
+	OAK_ASSERT([stagedPatch containsString:@"has a second edit"] && ![stagedPatch containsString:@"Working copy edit"]);
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		navigate(@"history");
+		NSButton* back = [workspace valueForKey:@"back"];
+		NSButton* forward = [workspace valueForKey:@"forward"];
+		OAK_ASSERT(back.enabled && !forward.enabled);
+		[back performClick:nil];
+		OAK_ASSERT([[[navigation itemAtRow:navigation.selectedRow] objectForKey:@"id"] isEqual:@"working"] && forward.enabled);
+		[forward performClick:nil];
+		OAK_ASSERT([[[navigation itemAtRow:navigation.selectedRow] objectForKey:@"id"] isEqual:@"history"]);
+	});
+	waitForUI(^BOOL{ return [[workspace valueForKey:@"historyTable"] numberOfRows] == 5; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSTableView* history = [workspace valueForKey:@"historyTable"];
+		id<NSTableViewDelegate> delegate = history.delegate;
+		OAK_ASSERT([delegate tableView:history isGroupRow:0] && [delegate tableView:history isGroupRow:3]);
+		OAK_ASSERT(![delegate tableView:history isGroupRow:1] && ![delegate tableView:history isGroupRow:2]);
+		OAK_ASSERT(![delegate tableView:history shouldSelectRow:0] && ![delegate tableView:history shouldSelectRow:3]);
+		OAK_ASSERT([[[workspace valueForKey:@"historyStatus"] stringValue] isEqual:@"3 commits"]);
+		NSStackView* commitRow = (NSStackView*)[history viewAtColumn:0 row:1 makeIfNecessary:YES];
+		GitGraphTracksView* tracks = (GitGraphTracksView*)commitRow.arrangedSubviews.firstObject;
+		OAK_ASSERT([tracks isKindOfClass:GitGraphTracksView.class] && !tracks.hidden && tracks.head && tracks.tracks[@"node"]);
+		[history selectRowIndexes:[NSIndexSet indexSetWithIndex:2] byExtendingSelection:NO];
+		NSMenu* historyMenu = rightClickRow(history, 1);
+		NSDictionary* clickedCommit = [historyMenu itemWithTitle:@"Copy Commit Hash to Clipboard"].representedObject;
+		OAK_ASSERT(history.selectedRow == 2 && [clickedCommit[@"commit"][@"head"] boolValue]);
+		OAK_ASSERT([historyMenu itemWithTitle:@"Copy Commit Info to Clipboard"].enabled);
+		NSString* down = [NSString stringWithFormat:@"%C", (unichar)NSDownArrowFunctionKey];
+		[history keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:NSEventModifierFlagFunction
+			timestamp:0 windowNumber:history.window.windowNumber context:nil characters:down charactersIgnoringModifiers:down isARepeat:NO keyCode:125]];
+		OAK_ASSERT(history.selectedRow == 4);
+		OAK_ASSERT([history rowViewAtRow:4 makeIfNecessary:YES].selected && ![history rowViewAtRow:3 makeIfNecessary:YES].selected);
+	});
+	waitForUI(^BOOL{
+		NSView* inspector = [workspace valueForKey:@"revisionInspector"];
+		return !inspector.hidden && [[inspector valueForKey:@"message"] stringValue].length > 0 && [[[inspector valueForKey:@"details"] objectForKey:@"message"] containsString:@"Original fixture body"];
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSView* inspector = [workspace valueForKey:@"revisionInspector"];
+		NSOutlineView* entries = [inspector valueForKey:@"outline"];
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		OAK_ASSERT(entries.numberOfRows == 2 && [[[entries itemAtRow:1] objectForKey:@"path"] isEqual:@"README.md"]);
+		NSTextField* message = [inspector valueForKey:@"message"];
+		NSView* metadata = [inspector valueForKey:@"metadata"];
+		NSView* header = [inspector valueForKey:@"header"];
+		NSClipView* clip = entries.enclosingScrollView.contentView;
+		OAK_ASSERT(message.enclosingScrollView == entries.enclosingScrollView && metadata.enclosingScrollView == entries.enclosingScrollView);
+		OAK_ASSERT(NSHeight(message.frame) > NSHeight(clip.bounds) && [message.stringValue containsString:@"Line 36"]);
+		NSButton* toggleMetadata = [inspector valueForKey:@"toggleMetadata"];
+		NSPoint togglePoint = [toggleMetadata convertPoint:NSMakePoint(NSMidX(toggleMetadata.bounds), NSMidY(toggleMetadata.bounds)) toView:inspector.superview];
+		OAK_ASSERT([[inspector hitTest:togglePoint] isDescendantOf:toggleMetadata]);
+		NSRect messageBefore = [message convertRect:message.bounds toView:inspector];
+		NSRect metadataBefore = [metadata convertRect:metadata.bounds toView:inspector];
+		NSRect headerBefore = [header convertRect:header.bounds toView:inspector];
+		[entries scrollRowToVisible:1];
+		OAK_ASSERT(NSContainsRect(clip.documentVisibleRect, [entries rectOfRow:1]));
+		NSMenu* fileMenu = rightClickRow(entries, 1);
+		NSDictionary* fileAction = [fileMenu itemWithTitle:@"Copy Relative File Path"].representedObject;
+		OAK_ASSERT([fileAction[@"file"][@"path"] isEqual:@"README.md"] && fileMenu.numberOfItems == 11);
+		OAK_ASSERT(!NSEqualRects([message convertRect:message.bounds toView:inspector], messageBefore));
+		OAK_ASSERT(!NSEqualRects([metadata convertRect:metadata.bounds toView:inspector], metadataBefore));
+		OAK_ASSERT(NSEqualRects([header convertRect:header.bounds toView:inspector], headerBefore));
+		[entries expandItem:[entries itemAtRow:1]];
+		OAK_ASSERT(entries.numberOfRows == 3);
+		[entries scrollRowToVisible:2];
+	});
+	waitForUI(^BOOL{
+		NSOutlineView* entries = [[workspace valueForKey:@"revisionInspector"] valueForKey:@"outline"];
+		NSView* diff = [entries viewAtColumn:0 row:2 makeIfNecessary:YES].subviews.firstObject;
+		return [diff isKindOfClass:GitDiffView.class] && [[[diff valueForKey:@"textView"] string] containsString:@"Line 48 remains unchanged."];
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSOutlineView* entries = [[workspace valueForKey:@"revisionInspector"] valueForKey:@"outline"];
+		[entries layoutSubtreeIfNeeded];
+		NSRect inlinePatch = [entries rectOfRow:2];
+		NSScrollView* list = entries.enclosingScrollView;
+		OAK_ASSERT(NSHeight(inlinePatch) > NSHeight(list.contentView.bounds));
+		[list.contentView scrollToPoint:NSMakePoint(0, NSMaxY(inlinePatch)-NSHeight(list.contentView.bounds))];
+		[list reflectScrolledClipView:list.contentView];
+		NSView* diff = [entries viewAtColumn:0 row:2 makeIfNecessary:NO].subviews.firstObject;
+		OAK_ASSERT([diff isKindOfClass:GitDiffView.class]);
+		NSTextView* inlineText = [diff valueForKey:@"textView"];
+		OAK_ASSERT(inlineText && !inlineText.enclosingScrollView.hasVerticalScroller);
+		[inlineText.layoutManager ensureLayoutForTextContainer:inlineText.textContainer];
+		NSRect lastLine = [inlineText.layoutManager usedRectForTextContainer:inlineText.textContainer];
+		NSPoint end = [inlineText convertPoint:NSMakePoint(0, NSMaxY(lastLine)-2) toView:entries];
+		OAK_ASSERT(NSMinY(list.documentVisibleRect) <= end.y && end.y < NSMaxY(list.documentVisibleRect));
+		NSSearchField* search = [workspace valueForKey:@"search"];
+		OAK_ASSERT(search.enabled && [search.placeholderString isEqual:@"Search for Message"] && search.searchMenuTemplate.numberOfItems == 4);
+		search.stringValue = @"Original fixture body";
+		[search sendAction:search.action to:search.target];
+	});
+	waitForUI(^BOOL{
+		NSTableView* history = [workspace valueForKey:@"historyTable"];
+		return history.numberOfRows == 2 && history.selectedRow == 1 && [[[workspace valueForKey:@"selectedCommit"] objectForKey:@"subject"] isEqual:@"Initial commit"];
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSButton* quick = [workspace valueForKey:@"quickActionsButton"];
+		[quick sendAction:quick.action to:quick.target];
+		NSWindow* panel = controller.window.childWindows.lastObject;
+		OAK_ASSERT(panel.isVisible && [panel isKindOfClass:NSPanel.class]);
+		OAK_ASSERT((panel.styleMask & NSWindowStyleMaskTitled) == 0);
+		OAK_ASSERT(panel.sheetParent == nil && panel.parentWindow == controller.window);
+#if !HAVE_OAK_SWIFTUI
+		NSWindowController* chooser = [workspace valueForKey:@"quickActions"];
+		[chooser setValue:@"topic/ui" forKey:@"filterString"];
+		NSArray* entries = [chooser valueForKey:@"items"];
+		OAK_ASSERT([entries.firstObject[@"checkout"] isEqual:@"refs/heads/topic/ui"]);
+#endif
+		[quick sendAction:quick.action to:quick.target];
+		OAK_ASSERT(!panel.isVisible && panel.parentWindow == nil);
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSButton* stashes = [workspace valueForKey:@"stashShortcut"];
+		[stashes performClick:nil];
+		NSButton* save = [workspace valueForKey:@"operationButtons"][@(GitRepositorySaveStash)];
+		OAK_ASSERT(save.enabled);
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"revisionInspector"] valueForKey:@"details"] objectForKey:@"message"] containsString:@"Stashed draft"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSView* inspector = [workspace valueForKey:@"revisionInspector"];
+		NSTableView* list = [workspace valueForKey:@"historyTable"];
+		NSOutlineView* entries = [inspector valueForKey:@"outline"];
+		NSRect overview = [entries rectOfRow:0];
+		[list selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
+		OAK_ASSERT([[[inspector valueForKey:@"message"] stringValue] containsString:@"Stashed draft"]);
+		OAK_ASSERT(NSEqualRects([entries rectOfRow:0], overview) && entries.numberOfRows == 2);
+		OAK_ASSERT(![[inspector valueForKey:@"stashActionButtons"][GitStashApply] isEnabled]);
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"revisionInspector"] valueForKey:@"details"] objectForKey:@"message"] containsString:@"Older draft"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSTableView* list = [workspace valueForKey:@"historyTable"];
+		[list selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"revisionInspector"] valueForKey:@"details"] objectForKey:@"message"] containsString:@"Stashed draft"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSView* inspector = [workspace valueForKey:@"revisionInspector"];
+		NSTableView* list = [workspace valueForKey:@"historyTable"];
+		OAK_ASSERT(list.numberOfRows == 2 && list.selectedRow == 0);
+		NSMenu* stashMenu = rightClickRow(list, 1);
+		NSDictionary* clickedStash = [stashMenu itemWithTitle:@"Apply Stash…"].representedObject;
+		OAK_ASSERT(list.selectedRow == 0 && [clickedStash[@"subject"] containsString:@"Older draft"]);
+		OAK_ASSERT([[workspace valueForKey:@"historyFooter"] isHidden]);
+		NSArray<NSButton*>* actions = [inspector valueForKey:@"stashActionButtons"];
+		NSButton* apply = actions[GitStashApply];
+		OAK_ASSERT(!apply.isHiddenOrHasHiddenAncestor && apply.enabled && actions[GitStashDelete].enabled);
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSPoint point = [apply convertPoint:NSMakePoint(NSMidX(apply.bounds), NSMidY(apply.bounds)) toView:inspector.superview];
+		OAK_ASSERT([[inspector hitTest:point] isDescendantOf:apply]);
+		NSOutlineView* entries = [inspector valueForKey:@"outline"];
+		OAK_ASSERT(entries.numberOfRows == 2 && [[[entries itemAtRow:1] objectForKey:@"path"] isEqual:@"README.md"]);
+		NSSegmentedControl* tabs = [inspector valueForKey:@"tabs"];
+		tabs.selectedSegment = 1;
+		[tabs sendAction:tabs.action to:tabs.target];
+	});
+	waitForUI(^BOOL{
+		NSOutlineView* entries = [[workspace valueForKey:@"revisionInspector"] valueForKey:@"outline"];
+		return entries.numberOfRows == 2 && [[[entries itemAtRow:1] objectForKey:@"kind"] isEqual:@"blob"];
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSButton* back = [workspace valueForKey:@"back"];
+		[back performClick:nil];
+		navigate(@"branchesReview");
+	});
+	waitForUI(^BOOL{
+		id review = [workspace valueForKey:@"branchesReview"];
+		NSArray* rows = [review valueForKey:@"rows"];
+		return rows.count == 1 && [[rows.firstObject objectForKey:@"name"] isEqual:@"topic/ui"]
+			&& [[[review valueForKey:@"comparison"] valueForKey:@"entries"] count] == 1;
+	});
+	git(@[@"branch", @"review/preview"]);
+	dispatch_sync(dispatch_get_main_queue(), ^{ [workspace refresh:nil]; });
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"branchesReview"] valueForKey:@"table"] valueForKey:@"numberOfRows"] integerValue] == 2; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		id review = [workspace valueForKey:@"branchesReview"];
+		NSSegmentedControl* tabs = [review valueForKey:@"tabs"];
+		tabs.selectedSegment = 1;
+		[tabs sendAction:tabs.action to:tabs.target];
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"branchesReview"] valueForKey:@"comparison"] valueForKey:@"comparison"] objectForKey:@"range"] != nil; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		id review = [workspace valueForKey:@"branchesReview"];
+		NSTableView* branches = [review valueForKey:@"table"];
+		NSView* comparison = [review valueForKey:@"comparison"];
+		NSString* title = [[review valueForKey:@"detailTitle"] stringValue];
+		[branches selectRowIndexes:[NSIndexSet indexSetWithIndex:1-branches.selectedRow] byExtendingSelection:NO];
+		OAK_ASSERT([[review valueForKey:@"tabs"] selectedSegment] == 1 && !comparison.hidden);
+		OAK_ASSERT([[[review valueForKey:@"detailTitle"] stringValue] isEqual:title]);
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"branchesReview"] valueForKey:@"detailTitle"] stringValue] hasPrefix:@"review/preview"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSTableView* branches = [[workspace valueForKey:@"branchesReview"] valueForKey:@"table"];
+		[branches selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+		NSMenu* menu = rightClickRow(branches, 1);
+		NSArray* titles = [[menu.itemArray filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSMenuItem* item, NSDictionary* bindings){ return !item.isSeparatorItem; }]] valueForKey:@"title"];
+		OAK_ASSERT(titles.count == 21 && [titles.firstObject isEqual:@"Check Out “topic/ui”"] && [titles.lastObject isEqual:@"Copy Branch Name to Clipboard"]);
+		OAK_ASSERT([menu itemWithTitle:@"Track Parent Branch"].submenu.numberOfItems >= 3);
+		OAK_ASSERT(![menu itemWithTitle:@"Force Push with Lease…"].enabled && ![menu itemWithTitle:@"Create New Pull Request from “topic/ui”…"].enabled);
+		NSMenuItem* pin = [menu itemWithTitle:@"Pin “topic/ui”"];
+		OAK_ASSERT(branches.selectedRow == 0 && pin.enabled && [NSApp sendAction:pin.action to:pin.target from:pin]);
+	});
+	waitForUI(^BOOL{
+		NSArray* branches = [[workspace valueForKey:@"branchesReview"] valueForKey:@"rows"];
+		return [branches.firstObject[@"name"] isEqual:@"topic/ui"] && [branches.firstObject[@"prefs"][@"pinned"] boolValue];
+	});
+	OAK_ASSERT([GitWorkspaceConfig(directory, @"branch.topic/ui.textmatePinned") isEqual:@"true"] && !GitWorkspaceConfig(directory, @"branch.review/preview.textmatePinned"));
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		navigate(@"pullRequests");
+	});
+	waitForUI(^BOOL{ return [[[[workspace valueForKey:@"pullRequests"] valueForKey:@"status"] stringValue] containsString:@"Add a GitHub remote"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		navigate(@"settings");
+	});
+	waitForUI(^BOOL{
+		id settings = [workspace valueForKey:@"repositorySettings"];
+		return [[settings valueForKey:@"fields"] objectForKey:@"user.email"] != nil;
+	});
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		NSViewController* settings = [workspace valueForKey:@"repositorySettings"];
+		[controller.window.contentView layoutSubtreeIfNeeded];
+		NSTextField* field = [settings valueForKey:@"fields"][@"textmate.issueTrackerURL"];
+		NSTextField* description = [settings valueForKey:@"descriptionField"];
+		NSButton* identity = [settings valueForKey:@"identityEdit"];
+		NSSegmentedControl* tabs = [settings valueForKey:@"tabs"];
+		OAK_ASSERT(settings.view.window == controller.window && !settings.view.isHiddenOrHasHiddenAncestor && NSHeight(field.frame) > 8);
+		OAK_ASSERT(identity.window == controller.window && [[settings valueForKey:@"footer"] isHidden]);
+		NSSize originalSize = controller.window.contentView.bounds.size;
+		for(NSNumber* width in @[@1440, @560]) {
+			[controller.window setContentSize:NSMakeSize(width.doubleValue, 840)];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			NSRect tabFrame = [tabs convertRect:tabs.bounds toView:settings.view];
+			NSRect descriptionFrame = [description convertRect:description.bounds toView:settings.view];
+			NSRect issueFrame = [field convertRect:field.bounds toView:settings.view];
+			OAK_ASSERT(NSWidth(issueFrame) > 44 && NSWidth(descriptionFrame) > 44 && fabs(NSMinX(issueFrame)-NSMinX(descriptionFrame)) <= 1);
+			OAK_ASSERT(NSContainsRect(settings.view.bounds, tabFrame) && NSMaxX(descriptionFrame) < NSWidth(settings.view.bounds));
+			OAK_ASSERT(NSMaxY(settings.view.bounds)-NSMaxY(descriptionFrame) < 230);
+		}
+		[controller.window setContentSize:originalSize];
+		field.stringValue = @"https://example.invalid/issues/{id}";
+		[[NSNotificationCenter defaultCenter] postNotificationName:NSControlTextDidChangeNotification object:field];
+		NSButton* save = [settings valueForKey:@"save"];
+		OAK_ASSERT(save.enabled);
+		[save performClick:nil];
+	});
+	waitForUI(^BOOL{ return [GitWorkspaceConfig(directory, @"textmate.issueTrackerURL") isEqual:@"https://example.invalid/issues/{id}"]; });
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		navigate(@"history");
+		modes.selectedSegment = 0;
+		[modes sendAction:modes.action to:modes.target];
+		OAK_ASSERT(!workspace.isActive && workspace.view.hidden && !editor.isHiddenOrHasHiddenAncestor);
+		OAK_ASSERT(!workspace.titleBarItems.superview);
+		OAK_ASSERT(controller.selectedDocument == document && [editor.selectionString isEqual:@"1:4"]);
+		OAK_ASSERT(controller.window.firstResponder == editor);
+		[document beginUndoGrouping];
+		document.content = @"Unsaved editor content\n";
+		[document endUndoGrouping];
+		[controller.window setContentSize:NSMakeSize(560, 320)];
+		[controller showGitWorkspace:nil];
+		NSSplitView* split = [workspace valueForKey:@"split"];
+		OAK_ASSERT(modes.selectedSegment == 1 && workspace.isActive);
+		OAK_ASSERT(NSMaxX(split.subviews.lastObject.frame) == NSWidth(split.bounds));
+		checkGitTitleBar(YES);
+		OakTabBarView* bar = (OakTabBarView*)modes.superview;
+		CGFloat originalInset = bar.leadingContentInset;
+		bar.leadingContentInset = 0; // As in full screen, where the traffic lights are hidden.
+		checkGitTitleBar(NO);
+		OAK_ASSERT(NSMinX(modes.frame) < originalInset);
+		bar.leadingContentInset = originalInset;
+		OAK_ASSERT([[[navigation itemAtRow:navigation.selectedRow] objectForKey:@"id"] isEqual:@"history"]);
+		[controller showGitWorkspace:nil];
+		OAK_ASSERT(modes.selectedSegment == 0 && controller.selectedDocument == document && document.isDocumentEdited);
+		OAK_ASSERT([document.content isEqual:@"Unsaved editor content\n"]);
+		[controller close];
+		[DocumentWindowController enableSessionSave];
+	});
+	OAK_ASSERT([files removeItemAtPath:fixture error:nil]);
 }
 
 void test_opening_project_in_window_with_only_browser_location_uses_current_window ()

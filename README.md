@@ -135,6 +135,8 @@ Press **Cmd+Shift+P** to open the command palette — a unified fuzzy-search int
 
 Results are ranked by fuzzy match score. Frequently used items are boosted over time.
 
+**File → Manage Recent Projects** opens a command palette for recent and favorite projects. Mark multiple results to open them together, or use the remove control to clear an entry. Removing an entry leaves its project files in place.
+
 ## Theme Editor
 
 Opening a file selects its syntax from the first line or filename extension. The app includes basic offline highlighting for C, C++, CSS, Go, HTML, JavaScript, JSON, Markdown, Objective-C, Python, Rust, shell scripts, Swift, TypeScript, and YAML. Installed language bundles provide the full grammars and take precedence over the built-in versions.
@@ -412,6 +414,24 @@ formatOnSave = true
 ```
 
 The legacy `lspFormatOnSave` key still works for backward compatibility.
+
+## Git Workspace and Source Control
+
+Open a Git project and select **Git** in the title bar. Select **Editor** to return to the same open tabs, or press **Control+Shift+G** to switch between the modes. In Git mode, use the left sidebar to browse the working copy, history, stashes, and local and remote references. The middle pane shows changed files or commits. Select a row to see its diff on the right. In Working Copy, search filters changed files. In History, use the magnifying glass menu to search the selected history by commit message, author, hash, or repository relative file path.
+
+Use the checkboxes to stage or unstage individual files. A collapsed untracked folder counts as one row and can be staged as a unit. **Stage All** switches to **Unstage All** when only staged changes remain. Save unsaved editor changes before staging. Select **Commit Subject** to expand the detailed description and commit options. **Commit** uses the staged changes. Choose **View → Show Source Control Sidebar** to add a compact Source Control section between Project and Outline. Each section can be shown or collapsed independently.
+
+In **Working Copy**, switch between **Staged** and **Unstaged** when the selected file has both kinds of changes. For saved text edits to tracked files, choose a chunk to stage, unstage, or discard separately. **History** shows commit ancestry inline; **History** and **Stashes** both let you expand individual files in **Changeset**, or browse the saved revision under **Tree**.
+
+**Branches Review** compares local branches to a selected base. It shows ahead/behind counts, merge and tracking status, commits, and changed files. Right-click a branch to check it out, pin it, configure tracking, publish it, or create a new branch or tag from it. Conflict simulation uses `git merge-tree --write-tree` when available. Archiving moves a branch into **Archived Branches** while retaining its commits and reflog; restore it from the **Archived** filter. The filter menu also lets you opt in to automatically archiving branches fully merged into the selected local base. Pinned branches, branches in use by a worktree, and branches marked **Skips Auto-Archiving** stay in place.
+
+**Pull Requests** uses [GitHub CLI](https://cli.github.com/). Sign in with `gh auth login`, then choose a GitHub remote to browse, review, check out, create, or merge pull requests. For a GitHub Enterprise remote, set `remote.<name>.textmateGitHubHost` in the repository configuration to its GitHub hostname.
+
+**Settings** edits repository identity, signing, commit templates and prompts, and issue links. The **Ignores** and **Excludes** tabs edit `.gitignore` and the repository’s local exclude rules. Git LFS actions require `git-lfs`, and Git Flow topic actions require `git-flow`. These tools can be installed independently.
+
+Double-click a local branch to check it out. Right-click a remote branch and choose **Check Out as Local Branch** to create a local branch that tracks it. The toolbar has **Quick Actions**, **Fetch**, **Pull**, **Push**, **Sync**, **Merge**, **Rebase**, **Apply Stash**, **Save Stash**, and **Refresh**. Sync pulls the selected remote branch and pushes only after a successful pull. From the repository actions menu you can continue or abort a merge or rebase after a conflict. Remote operations use the repository's configured remotes and Git credentials.
+
+Choose **Stashes → Save Stash** to set aside changes, optionally including untracked files. Right-click a stash to apply it, pop it, or delete it. Apply keeps the stash; Pop removes it after a successful apply. Both can also restore which changes were staged.
 
 ## Terminal
 

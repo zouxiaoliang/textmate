@@ -134,7 +134,12 @@ static void* kFirstResponderObserverContext = &kFirstResponderObserverContext;
 @implementation OakChooser
 - (id)init
 {
-	if((self = [super initWithWindow:[[NSPanel alloc] initWithContentRect:NSMakeRect(600, 700, 400, 500) styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable) backing:NSBackingStoreBuffered defer:NO]]))
+	return [self initWithWindow:[[NSPanel alloc] initWithContentRect:NSMakeRect(600, 700, 400, 500) styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable) backing:NSBackingStoreBuffered defer:NO]];
+}
+
+- (instancetype)initWithWindow:(NSWindow*)window
+{
+	if((self = [super initWithWindow:window]))
 	{
 		_items = @[ ];
 

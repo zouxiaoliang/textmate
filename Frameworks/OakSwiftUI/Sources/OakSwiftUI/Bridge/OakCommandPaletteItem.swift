@@ -21,6 +21,8 @@ import AppKit
 	@objc public var icon: NSImage?
 	@objc public var enabled: Bool = true
 	@objc public weak var sourceMenuItem: NSMenuItem?
+	@objc public var representedObject: Any?
+	@objc public var removalLabel: String?
 
 	@objc public init(title: String, subtitle: String, keyEquivalent: String,
 	                  category: OakCommandPaletteCategory, actionIdentifier: String) {

@@ -4,9 +4,9 @@ target_sources(DocumentWindow PRIVATE ${_src})
 textmate_framework(DocumentWindow)
 target_link_libraries(DocumentWindow PUBLIC
   BundleEditor BundlesManager FileBrowser Find HTMLOutputWindow MenuBuilder OakAppKit
-  OakTabBarView OakCommand OakFilterList OakFoundation OakSystem OakTextView Preferences
+  OakTabBarView OakCommand OakFilterList OakFoundation OakSystem OakTextView Preferences TMFileReference
   bundles crash document file io kvdb ns regexp scm settings text
-  "-framework Cocoa" "-framework SystemConfiguration")
+  "-framework Cocoa" "-framework SystemConfiguration" "-framework Quartz")
 
 textmate_add_tests(DocumentWindow)
 

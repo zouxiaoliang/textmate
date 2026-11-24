@@ -91,18 +91,35 @@ public class CommandPaletteViewModel: ObservableObject {
 	@Published public private(set) var activeMode: PaletteMode = .recentProjects
 	@Published public private(set) var filteredItems: [RankedItem] = []
 	@Published public var selectedIndex: Int = 0
+	@Published private(set) var markedItems: Set<UUID> = []
+	@Published private(set) var removalError: String?
 
 	public var onItemSelected: ((OakCommandPaletteItem) -> Void)?
+	var onItemsSelected: (([OakCommandPaletteItem]) -> Void)?
+	var onItemRemoved: ((OakCommandPaletteItem) -> Bool)?
 	public var onDismiss: (() -> Void)?
 	public var onModeSwitch: ((PaletteMode) -> [OakCommandPaletteItem])?
 	public var onSearchDocument: ((String) -> [OakCommandPaletteItem])?
 
 	private var itemsByMode: [PaletteMode: [OakCommandPaletteItem]] = [:]
 	public private(set) var frecencyData: [String: FrecencyEntry] = [:]
+	private let scopedSearch: (label: String, placeholder: String, suggestions: (String) -> [OakCommandPaletteItem])?
 
-	public init() {}
+	public init() { scopedSearch = nil }
+
+	init(label: String, placeholder: String, suggestions: @escaping (String) -> [OakCommandPaletteItem]) {
+		scopedSearch = (label, placeholder, suggestions)
+		activeMode = .commands
+	}
+
+	var searchLabel: String? {
+		scopedSearch?.label ?? (activeMode == .recentProjects ? nil : activeMode.label)
+	}
+
+	var searchPlaceholder: String { scopedSearch?.placeholder ?? activeMode.placeholder }
 
 	public var queryText: String {
+		if scopedSearch != nil { return filterText.trimmingCharacters(in: .whitespacesAndNewlines) }
 		guard let prefix = activeMode.prefix, filterText.first == prefix else {
 			return filterText
 		}
@@ -129,10 +146,38 @@ public class CommandPaletteViewModel: ObservableObject {
 	}
 
 	public func acceptSelection() {
-		guard selectedIndex >= 0, selectedIndex < filteredItems.count else { return }
-		let item = filteredItems[selectedIndex].item
-		guard item.enabled else { return }
-		onItemSelected?(item)
+		if let onItemsSelected {
+			let items = itemsToOpen
+			if !items.isEmpty { onItemsSelected(items) }
+		} else if let item = selectedItem, item.enabled {
+			onItemSelected?(item)
+		}
+	}
+
+	var managesItems: Bool { onItemsSelected != nil }
+
+	var itemsToOpen: [OakCommandPaletteItem] {
+		if markedItems.isEmpty { return selectedItem.flatMap { $0.enabled ? [$0] : nil } ?? [] }
+		return (itemsByMode[activeMode] ?? []).filter { $0.enabled && markedItems.contains($0.id) }
+	}
+
+	func toggleMark(_ item: OakCommandPaletteItem) {
+		guard managesItems, item.enabled else { return }
+		if markedItems.remove(item.id) == nil { markedItems.insert(item.id) }
+	}
+
+	func remove(_ item: OakCommandPaletteItem) {
+		guard item.removalLabel != nil, let onItemRemoved else { return }
+		guard onItemRemoved(item) else {
+			removalError = "Couldn’t remove \(item.title)."
+			return
+		}
+		removalError = nil
+		let previous = selectedItem?.id
+		markedItems.remove(item.id)
+		itemsByMode[activeMode]?.removeAll { $0.id == item.id }
+		applyFilter()
+		selectedIndex = filteredItems.firstIndex { $0.id == previous } ?? min(selectedIndex, max(0, filteredItems.count - 1))
 	}
 
 	public func requestDismiss() {
@@ -164,6 +209,11 @@ public class CommandPaletteViewModel: ObservableObject {
 	}
 
 	private func processFilterChange() {
+		if scopedSearch != nil {
+			applyFilter()
+			selectedIndex = 0
+			return
+		}
 		let newMode: PaletteMode
 		if let first = filterText.first, let mode = PaletteMode(prefix: first) {
 			newMode = mode
@@ -206,24 +256,29 @@ public class CommandPaletteViewModel: ObservableObject {
 			return
 		}
 
-		guard let items = itemsByMode[activeMode] else {
-			filteredItems = []
-			return
-		}
+		let items = itemsByMode[activeMode] ?? []
 
 		if query.isEmpty {
 			filteredItems = items.map { RankedItem(item: $0, matchedIndices: [], score: 0) }
 			return
 		}
 
-		filteredItems = items
+		let matches = items
 			.compactMap { item -> RankedItem? in
-				guard let result = FuzzyMatcher.score(item.title, query: query) else { return nil }
 				let frecency = frecencyBoost(for: item.actionIdentifier)
-				let combinedScore = Double(result.score) * (1.0 + frecency)
-				return RankedItem(item: item, matchedIndices: result.matchedIndices, score: combinedScore)
+				if let result = FuzzyMatcher.score(item.title, query: query) {
+					return RankedItem(item: item, matchedIndices: result.matchedIndices, score: Double(result.score) * (1 + frecency))
+				}
+				if item.category == .recentProject,
+				   let result = FuzzyMatcher.score(item.representedObject as? String ?? item.subtitle, query: query)
+				     ?? FuzzyMatcher.score(item.subtitle, query: query) {
+					return RankedItem(item: item, matchedIndices: [], score: Double(result.score) * 0.5)
+				}
+				return nil
 			}
 			.sorted { $0.score > $1.score }
+		let suggestions = scopedSearch?.suggestions(query) ?? []
+		filteredItems = matches + suggestions.map { RankedItem(item: $0, matchedIndices: [], score: 0) }
 	}
 
 	private func goToLineItems(query: String) -> [RankedItem] {

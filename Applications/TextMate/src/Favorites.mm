@@ -37,13 +37,15 @@ static NSUInteger const kOakSourceIndexFavorites      = 1;
 {
 	if(self = [super init])
 	{
-		NSError* error;
+		NSError* error = nil;
 
 		_path = isLink ? [NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:path error:&error] : path;
 		_link = isLink ? path : nil;
 
 		if(error)
 			os_log_error(OS_LOG_DEFAULT, "Failed to read link: %{public}@", error.localizedDescription);
+		if(!_path.length) return nil;
+		if(isLink && !_path.isAbsolutePath) _path = [[path.stringByDeletingLastPathComponent stringByAppendingPathComponent:_path] stringByStandardizingPath];
 
 		if(isLink && ![path.lastPathComponent isEqualToString:_path.lastPathComponent])
 				_displayName = path.lastPathComponent;
@@ -57,6 +59,47 @@ static NSUInteger const kOakSourceIndexFavorites      = 1;
 	return self;
 }
 @end
+
+static NSArray<FavoritesItem*>* FavoriteItems()
+{
+	NSMutableArray<FavoritesItem*>* items = [NSMutableArray array];
+	std::string const favoritesPath = oak::application_t::support("Favorites");
+	for(auto const& entry : path::entries(favoritesPath))
+	{
+		if(entry->d_type != DT_LNK) continue;
+		std::string const linkPath = path::join(favoritesPath, entry->d_name);
+		if(strncmp("[DIR] ", entry->d_name, 6) != 0)
+		{
+			if(FavoritesItem* item = [[FavoritesItem alloc] initWithPath:to_ns(linkPath) isLink:YES isRemovable:YES]) [items addObject:item];
+			continue;
+		}
+		std::string const resolved = path::resolve(linkPath);
+		bool namedGroup = path::name(resolved) != std::string(entry->d_name + 6);
+		for(auto const& subentry : path::entries(resolved))
+		{
+			if(subentry->d_type != DT_DIR) continue;
+			FavoritesItem* item = [[FavoritesItem alloc] initWithPath:to_ns(path::join(resolved, subentry->d_name)) isLink:NO isRemovable:NO];
+			item.displayNameSuffix = namedGroup ? [NSString stringWithFormat:@" — %s", entry->d_name + 6] : nil;
+			if(item) [items addObject:item];
+		}
+	}
+	return [items sortedArrayUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"displayName" ascending:YES selector:@selector(localizedCompare:)]]];
+}
+
+NSArray<NSDictionary<NSString*, NSString*>*>* OakFavoriteProjectEntries()
+{
+	NSMutableArray* entries = [NSMutableArray array];
+	for(FavoritesItem* item in FavoriteItems())
+	{
+		if(access(item.path.fileSystemRepresentation, F_OK) == 0)
+		{
+			NSMutableDictionary* entry = [@{ @"path": item.path, @"name": [(item.displayName ?: item.path.lastPathComponent) stringByAppendingString:item.displayNameSuffix ?: @""] } mutableCopy];
+			if(item.link && item.isRemovable) entry[@"link"] = item.link;
+			[entries addObject:entry];
+		}
+	}
+	return entries;
+}
 
 @interface FavoriteChooser ()
 {
@@ -191,6 +234,11 @@ static NSUInteger const kOakSourceIndexFavorites      = 1;
 
 - (void)loadItems:(id)sender
 {
+	if(_sourceIndex == kOakSourceIndexFavorites)
+	{
+		_originalItems = FavoriteItems();
+		return;
+	}
 	NSMutableArray<FavoritesItem*>* items = [NSMutableArray array];
 	if(_sourceIndex == kOakSourceIndexRecentProjects)
 	{
@@ -201,38 +249,8 @@ static NSUInteger const kOakSourceIndexFavorites      = 1;
 				[items addObject:[[FavoritesItem alloc] initWithPath:pair[@"key"] isLink:NO isRemovable:YES]];
 		}
 	}
-	else if(_sourceIndex == kOakSourceIndexFavorites)
-	{
-		std::string const favoritesPath = oak::application_t::support("Favorites");
-		for(auto const& entry : path::entries(favoritesPath))
-		{
-			if(entry->d_type == DT_LNK)
-			{
-				if(strncmp("[DIR] ", entry->d_name, 6) == 0)
-				{
-					std::string const path = path::resolve(path::join(favoritesPath, entry->d_name));
-					bool includeSymlinkName = path::name(path) != std::string(entry->d_name + 6);
-					for(auto const& subentry : path::entries(path))
-					{
-						if(subentry->d_type == DT_DIR)
-						{
-							FavoritesItem* item = [[FavoritesItem alloc] initWithPath:to_ns(path::join(path, subentry->d_name)) isLink:NO isRemovable:NO];
-							item.displayNameSuffix = includeSymlinkName ? [NSString stringWithFormat:@" — %s", entry->d_name + 6] : nil;
-							[items addObject:item];
-						}
-					}
-				}
-				else
-				{
-					[items addObject:[[FavoritesItem alloc] initWithPath:to_ns(path::join(favoritesPath, entry->d_name)) isLink:YES isRemovable:YES]];
-				}
-			}
-		}
-	}
 
 	_originalItems = items;
-	if(_sourceIndex == kOakSourceIndexFavorites)
-		_originalItems = [items sortedArrayUsingDescriptors:@[ [NSSortDescriptor sortDescriptorWithKey:@"displayName" ascending:YES selector:@selector(localizedCompare:)] ]];
 }
 
 - (void)showWindow:(id)sender

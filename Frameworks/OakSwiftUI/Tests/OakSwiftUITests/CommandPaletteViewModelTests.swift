@@ -84,6 +84,42 @@ struct CommandPaletteViewModelTests {
 		#expect(boost > 0)
 	}
 
+	@Test func scopedPaletteMatchesBranchesAndAcceptsFileSuggestions() {
+		let branch = OakCommandPaletteItem(title: "Check Out topic/ui", subtitle: "", keyEquivalent: "", category: .menuAction, actionIdentifier: "checkout")
+		let vm = CommandPaletteViewModel(label: "Git", placeholder: "Search actions, branches, and tags…") { query in
+			let item = OakCommandPaletteItem(title: "Show History for File: \(query)", subtitle: "", keyEquivalent: "", category: .menuAction, actionIdentifier: "history")
+			item.representedObject = query
+			return [item]
+		}
+		vm.setItems([branch], forMode: .commands)
+		#expect(vm.filteredItems.count == 1)
+		vm.filterText = "topic/ui"
+		#expect(vm.selectedItem === branch)
+
+		vm.filterText = "  /src/file.mm  "
+		#expect(vm.activeMode == .commands)
+		#expect(vm.queryText == "/src/file.mm")
+		var openedFile: String?
+		vm.onItemSelected = { openedFile = $0.representedObject as? String }
+		vm.acceptSelection()
+		#expect(openedFile == "/src/file.mm")
+	}
+
+	@Test func recentProjectsWithTheSameNameCanBeFoundByFullPath() {
+		func project(_ path: String, subtitle: String) -> OakCommandPaletteItem {
+			let item = OakCommandPaletteItem(title: "TextMate", subtitle: subtitle, keyEquivalent: "", category: .recentProject, actionIdentifier: path)
+			item.representedObject = path
+			return item
+		}
+		let vm = CommandPaletteViewModel(label: "Recent Projects", placeholder: "Search recent projects…") { _ in [] }
+		let work = project("/Users/dev/work/TextMate", subtitle: "~/work/TextMate")
+		let personal = project("/Users/dev/personal/TextMate", subtitle: "Favorite · ~/personal/TextMate")
+		vm.setItems([work, personal], forMode: .commands)
+		vm.filterText = "/Users/dev/personal"
+		#expect(vm.filteredItems.count == 1)
+		#expect(vm.selectedItem === personal)
+	}
+
 	@Test func frecencyBoostDecaysOverTime() {
 		let vm = CommandPaletteViewModel()
 		let now = Date().timeIntervalSinceReferenceDate
@@ -95,6 +131,42 @@ struct CommandPaletteViewModelTests {
 		let oldBoost = vm.frecencyBoost(for: "old")
 		let recentBoost = vm.frecencyBoost(for: "recent")
 		#expect(recentBoost > oldBoost)
+	}
+
+	@Test func managingProjectsKeepsSelectionAcrossSearchAndRemovesOnlyTheRequestedEntry() {
+		let vm = CommandPaletteViewModel(label: "Manage Recent Projects", placeholder: "Search…") { _ in [] }
+		let recent = OakCommandPaletteItem(title: "TextMate", subtitle: "~/work/TextMate", keyEquivalent: "", category: .recentProject, actionIdentifier: "recent")
+		let favorite = OakCommandPaletteItem(title: "TextMate", subtitle: "Favorite · ~/work/TextMate", keyEquivalent: "", category: .recentProject, actionIdentifier: "favorite")
+		let other = OakCommandPaletteItem(title: "Example", subtitle: "~/work/Example", keyEquivalent: "", category: .recentProject, actionIdentifier: "other")
+		recent.removalLabel = "Remove from Recent Projects"
+		var opened: [String] = []
+		vm.onItemsSelected = { opened = $0.map(\.actionIdentifier) }
+		vm.onItemRemoved = { $0 === recent }
+		vm.setItems([recent, favorite, other], forMode: .commands)
+		vm.toggleMark(recent)
+		vm.toggleMark(favorite)
+		vm.filterText = "Example"
+		#expect(vm.selectedItem === other)
+		vm.toggleMark(other)
+		vm.remove(recent)
+		vm.acceptSelection()
+		#expect(opened == ["favorite", "other"])
+		vm.filterText = "TextMate"
+		#expect(vm.filteredItems.map(\.item.id) == [favorite.id])
+	}
+
+	@Test func failedProjectRemovalKeepsTheRecordAndSelection() {
+		let vm = CommandPaletteViewModel(label: "Manage Recent Projects", placeholder: "Search…") { _ in [] }
+		let item = OakCommandPaletteItem(title: "TextMate", subtitle: "~/work/TextMate", keyEquivalent: "", category: .recentProject, actionIdentifier: "recent")
+		item.removalLabel = "Remove from Recent Projects"
+		vm.onItemsSelected = { _ in }
+		vm.onItemRemoved = { _ in false }
+		vm.setItems([item], forMode: .commands)
+		vm.toggleMark(item)
+		vm.remove(item)
+		#expect(vm.removalError != nil)
+		#expect(vm.selectedItem === item)
+		#expect(vm.itemsToOpen.first === item)
 	}
 
 	@Test func selectionNavigationWorks() {

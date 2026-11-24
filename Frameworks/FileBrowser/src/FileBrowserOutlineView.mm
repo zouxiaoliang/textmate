@@ -3,6 +3,13 @@
 #import <ns/ns.h>
 
 @implementation FileBrowserOutlineView
+- (instancetype)initWithFrame:(NSRect)frame
+{
+	if(self = [super initWithFrame:frame])
+		self.rootIndentation = 2 * kOakSidebarIndentation;
+	return self;
+}
+
 - (void)expandItem:(id)someItem expandChildren:(BOOL)flag
 {
 	if([self.delegate respondsToSelector:@selector(outlineView:willExpandItem:expandChildren:)])

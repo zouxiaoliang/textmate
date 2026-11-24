@@ -62,7 +62,7 @@ void test_terminal_panel_open_project ()
 			controller.panelHeight = 220;
 			FileBrowserViewController* browser = [[FileBrowserViewController alloc] init];
 			CGFloat minimumBrowserHeight = browser.view.fittingSize.height;
-			content.fileBrowserView = browser.view;
+			content.fileBrowserView = (FileBrowserView*)browser.view;
 			[window.contentView updateConstraintsForSubtreeIfNeeded];
 			[content layoutSubtreeIfNeeded];
 			OAK_ASSERT(NSHeight(browser.view.frame) >= minimumBrowserHeight);

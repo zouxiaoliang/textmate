@@ -131,6 +131,9 @@ BOOL HasDocumentWindow (NSArray* windows)
 					}
 				},
 				{ @"Open Recent Project…",    @selector(openFavorites:),            @"O"   },
+#if HAVE_OAK_SWIFTUI
+				{ @"Manage Recent Projects…", @selector(manageRecentProjects:)            },
+#endif
 				{ /* -------- */ },
 				{ @"Close",                   @selector(performClose:),             @"w"   },
 				{ @"Close Window",            @selector(performCloseWindow:),       @"W"   },
@@ -250,6 +253,8 @@ BOOL HasDocumentWindow (NSArray* windows)
 				{ @"Show Outline",           @selector(toggleOutline:),         @"o", .modifierFlags = NSEventModifierFlagCommand|NSEventModifierFlagOption|NSEventModifierFlagControl },
 				{ @"Show Terminal Panel",    @selector(toggleTerminalPanel:),  @"`", .modifierFlags = NSEventModifierFlagControl },
 				{ @"Show Project Changes", @selector(showProjectChanges:) },
+				{ @"Switch to Git Mode", @selector(showGitWorkspace:), @"g", .modifierFlags = NSEventModifierFlagControl|NSEventModifierFlagShift },
+				{ @"Show Source Control Sidebar", @selector(toggleSourceControl:) },
 				{ @"Terminal Panel Position", .submenu = {
 					{ @"Left", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionLeft },
 					{ @"Right", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionRight },
@@ -762,9 +767,22 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 - (IBAction)openFavorites:(id)sender
 {
+#if HAVE_OAK_SWIFTUI
+	[self showRecentProjectPaletteManaging:NO];
+#else
+	[self manageRecentProjects:sender];
+#endif
+}
+
+- (IBAction)manageRecentProjects:(id)sender
+{
+#if HAVE_OAK_SWIFTUI
+	[self showRecentProjectPaletteManaging:YES];
+#else
 	FavoriteChooser* chooser = FavoriteChooser.sharedInstance;
 	chooser.action = @selector(didSelectFavorite:);
 	[chooser showWindow:self];
+#endif
 }
 
 - (void)didSelectFavorite:(id)sender
@@ -887,7 +905,15 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 #if HAVE_OAK_SWIFTUI
 static OakCommandPalette* sharedCommandPalette;
-static OakThemeEnvironment* sharedThemeEnvironment;
+
+- (OakCommandPalette*)commandPalette
+{
+	if(!sharedCommandPalette) {
+		sharedCommandPalette = [[OakCommandPalette alloc] initWithTheme:[[OakThemeEnvironment alloc] init]];
+		sharedCommandPalette.delegate = (id<OakCommandPaletteDelegate>)self;
+	}
+	return sharedCommandPalette;
+}
 
 static NSString* formattedKeyEquivalent (NSMenuItem* item)
 {
@@ -947,13 +973,16 @@ static KVDB* commandPaletteFrecencyDB ()
 	return [KVDB sharedDBUsingFile:@"CommandPalette.db" inDirectory:appSupport];
 }
 
+static KVDB* recentProjectsDB()
+{
+	NSString* appSupport = [[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:@"TextMate"];
+	return [KVDB sharedDBUsingFile:@"RecentProjects.db" inDirectory:appSupport];
+}
+
 - (NSArray<OakCommandPaletteItem*>*)recentProjectsForCommandPalette
 {
 	NSMutableArray* result = [NSMutableArray array];
-	NSString* appSupport = [[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:@"TextMate"];
-	KVDB* db = [KVDB sharedDBUsingFile:@"RecentProjects.db" inDirectory:appSupport];
-
-	NSArray* sorted = [db.allObjects sortedArrayUsingDescriptors:@[
+	NSArray* sorted = [recentProjectsDB().allObjects sortedArrayUsingDescriptors:@[
 		[NSSortDescriptor sortDescriptorWithKey:@"value.lastRecentlyUsed" ascending:NO],
 		[NSSortDescriptor sortDescriptorWithKey:@"key.lastPathComponent" ascending:YES selector:@selector(localizedCompare:)]
 	]];
@@ -971,9 +1000,61 @@ static KVDB* commandPaletteFrecencyDB ()
 			     category:OakCommandPaletteCategoryRecentProject
 		     actionIdentifier:[NSString stringWithFormat:@"project:%@", path]];
 		item.icon = [NSWorkspace.sharedWorkspace iconForFile:path];
+		item.representedObject = path;
 		[result addObject:item];
 	}
 	return result;
+}
+
+- (void)showRecentProjectPaletteManaging:(BOOL)managing
+{
+	OakCommandPalette* palette = [self commandPalette];
+	NSWindow* window = palette.isVisible ? palette.parentWindow : NSApp.keyWindow ?: NSApp.mainWindow;
+	window = window.parentWindow ?: window;
+	if(window.attachedSheet || window.sheetParent) return;
+	NSMutableArray<OakCommandPaletteItem*>* items = [[self recentProjectsForCommandPalette] mutableCopy];
+	NSMutableDictionary<NSString*, OakCommandPaletteItem*>* recentByPath = [NSMutableDictionary dictionary];
+	NSMutableDictionary<NSString*, NSString*>* favoriteLinks = [NSMutableDictionary dictionary];
+	for(OakCommandPaletteItem* item in items) {
+		recentByPath[item.representedObject] = item;
+		if(managing) item.removalLabel = @"Remove from Recent Projects";
+	}
+	for(NSDictionary* entry in OakFavoriteProjectEntries()) {
+		NSString* path = entry[@"path"], *name = entry[@"name"], *link = entry[@"link"];
+		if(!managing && [recentByPath[path].title isEqual:name]) continue;
+		NSString* identifier = [@"favorite:" stringByAppendingString:link ?: path];
+		OakCommandPaletteItem* item = [[OakCommandPaletteItem alloc] initWithTitle:name
+			subtitle:[@"Favorite · " stringByAppendingString:path.stringByAbbreviatingWithTildeInPath] keyEquivalent:@""
+			category:OakCommandPaletteCategoryRecentProject actionIdentifier:identifier];
+		item.icon = [NSWorkspace.sharedWorkspace iconForFile:path];
+		item.representedObject = path;
+		if(managing && link) {
+			favoriteLinks[identifier] = link;
+			item.removalLabel = @"Remove from Favorites";
+		}
+		[items addObject:item];
+	}
+	if(managing) {
+		[palette showManagingIn:window items:items label:@"Manage Recent Projects" placeholder:@"Search recent and favorite projects…"
+			onOpen:^(NSArray<OakCommandPaletteItem*>* selection){
+				NSMutableOrderedSet* paths = [NSMutableOrderedSet orderedSet];
+				for(OakCommandPaletteItem* item in selection) [paths addObject:item.representedObject];
+				OakOpenDocuments(paths.array, YES);
+			} onRemove:^BOOL(OakCommandPaletteItem* item){
+				if(NSString* link = favoriteLinks[item.actionIdentifier]) {
+					NSFileManager* files = NSFileManager.defaultManager;
+					return [files destinationOfSymbolicLinkAtPath:link error:nil] != nil && [files trashItemAtURL:[NSURL fileURLWithPath:link] resultingItemURL:nil error:nil];
+				}
+				if(![item.actionIdentifier hasPrefix:@"project:"]) return NO;
+				[recentProjectsDB() removeObjectForKey:item.representedObject];
+				return [recentProjectsDB() valueForKey:item.representedObject] == nil;
+			}];
+		return;
+	}
+	[palette showIn:window items:items label:@"Recent Projects" placeholder:@"Search recent and favorite projects…"
+		suggestions:^NSArray*(NSString* query){ return @[]; } onSelect:^(OakCommandPaletteItem* item){
+		OakOpenDocuments(@[item.representedObject], YES);
+	}];
 }
 #endif
 
@@ -984,14 +1065,7 @@ static KVDB* commandPaletteFrecencyDB ()
 	if(!keyWindow)
 		return;
 
-	if(!sharedThemeEnvironment)
-		sharedThemeEnvironment = [[OakThemeEnvironment alloc] init];
-
-	if(!sharedCommandPalette)
-	{
-		sharedCommandPalette = [[OakCommandPalette alloc] initWithTheme:sharedThemeEnvironment];
-		sharedCommandPalette.delegate = (id<OakCommandPaletteDelegate>)self;
-	}
+	OakCommandPalette* palette = [self commandPalette];
 
 	NSMutableArray<OakCommandPaletteItem*>* items = [NSMutableArray array];
 	NSMutableSet<NSString*>* bundleUUIDs = [NSMutableSet set];
@@ -1012,7 +1086,7 @@ static KVDB* commandPaletteFrecencyDB ()
 	}
 
 	NSLog(@"CommandPalette: showing with %lu menu items, parentWindow=%@", (unsigned long)items.count, keyWindow.title);
-	[sharedCommandPalette showIn:keyWindow items:items];
+	[palette showIn:keyWindow items:items];
 
 	KVDB* frecencyDB = commandPaletteFrecencyDB();
 	NSMutableDictionary* frecencyData = [NSMutableDictionary dictionary];

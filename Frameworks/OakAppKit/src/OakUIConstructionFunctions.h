@@ -14,9 +14,11 @@ typedef NS_ENUM(NSUInteger, OakBackgroundFillViewStyle) {
 @end
 
 extern CGFloat const kOakSidebarDisclosureCenter;
+extern CGFloat const kOakSidebarIndentation;
 NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat trailingPadding = 0);
 
 @interface OakSidebarTreeView : NSOutlineView
+@property (nonatomic) CGFloat rootIndentation;
 - (NSTableRowView*)makeTreeRowView;
 @end
 

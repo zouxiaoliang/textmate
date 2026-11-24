@@ -902,7 +902,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSColor*)titleBarSurfaceColor
 {
-	return self.titleBarBackgroundColor ?: NSColor.windowBackgroundColor;
+	return self.alternateTitleBarItems ? NSColor.windowBackgroundColor : (self.titleBarBackgroundColor ?: NSColor.windowBackgroundColor);
 }
 
 - (NSColor*)titleBarInkColor
@@ -955,7 +955,14 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	NSColor* ink = [self titleBarInkColor];
 	BOOL hasMultipleTabs = _tabItems.count > 1;
 	[surface setFill];
-	NSRectFill(dirtyRect);
+	NSRectFill(self.alternateTitleBarItems ? NSIntersectionRect(dirtyRect, self.bounds) : dirtyRect);
+	if(self.alternateTitleBarItems)
+	{
+		[NSColor.separatorColor setFill];
+		CGFloat pixel = 1.0 / (self.window.backingScaleFactor ?: 1);
+		NSRectFillUsingOperation(NSMakeRect(NSMinX(self.bounds), NSMinY(self.bounds), NSWidth(self.bounds), pixel), NSCompositingOperationSourceOver);
+		return;
+	}
 	if(!hasMultipleTabs && _dropTabAtIndex < 0)
 		return;
 	[[ink colorWithAlphaComponent:0.045] setFill];
@@ -1077,6 +1084,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSMenu*)menuForEvent:(NSEvent*)anEvent
 {
+	if(self.fileTabsHidden)
+		return nil;
 	_tag = -1;
 	return [_delegate respondsToSelector:@selector(menuForTabBarView:)] ? [_delegate menuForTabBarView:self] : nil;
 }
@@ -1124,7 +1133,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 		return;
 	_statusTextLabel.stringValue = newText;
 	_statusTextLabel.textColor   = color ?: NSColor.secondaryLabelColor;
-	_statusTextLabel.hidden      = newText.length == 0;
+	_statusTextLabel.hidden      = _alternateTitleBarItems || newText.length == 0;
 	[_statusTextLabel sizeToFit];
 	[self updateToLayout:[self makeLayout]];
 }
@@ -1621,6 +1630,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSDragOperation)draggingUpdated:(id <NSDraggingInfo>)sender
 {
+	if(self.fileTabsHidden)
+		return NSDragOperationNone;
 	OakTabBarView* source = [sender.draggingSource isKindOfClass:OakTabBarView.class] ? sender.draggingSource : nil;
 	NSDragOperation mask = sender.draggingSourceOperationMask;
 	NSDragOperation operation = (mask & NSDragOperationMove) ?: (mask & NSDragOperationCopy);
@@ -1652,7 +1663,7 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	// release location before accepting a drop, especially after leaving the bar.
 	NSPoint screenPoint = NSEvent.mouseLocation;
 	OakTabBarView* source = sender.draggingSource;
-	if(!NSPointInRect([self pointInBarFromScreen:screenPoint], self.bounds) || (source != self && [source isTabDragOnRailAtPoint:screenPoint]))
+	if(self.fileTabsHidden || !NSPointInRect([self pointInBarFromScreen:screenPoint], self.bounds) || (source != self && [source isTabDragOnRailAtPoint:screenPoint]))
 	{
 		self.dragging = NO;
 		self.dropTabAtIndex = -1;
@@ -1792,9 +1803,52 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	[self updateToLayout:[self makeLayout]];
 }
 
+- (void)setLeadingControl:(NSControl*)control
+{
+	if(_leadingControl == control)
+		return;
+	[_leadingControl removeFromSuperview];
+	_leadingControl = control;
+	if(control)
+		[self addSubview:control];
+	[self updateToLayout:[self makeLayout]];
+}
+
+- (void)setShowsOnlyLeadingControl:(BOOL)value
+{
+	if(_showsOnlyLeadingControl == value)
+		return;
+	_showsOnlyLeadingControl = value;
+	[self updateToLayout:[self makeLayout]];
+}
+
+- (void)setAlternateTitleBarItems:(NSView*)items
+{
+	if(_alternateTitleBarItems == items)
+		return;
+	[_alternateTitleBarItems removeFromSuperview];
+	_alternateTitleBarItems = items;
+	if(items)
+		[self addSubview:items positioned:NSWindowBelow relativeTo:_leadingControl];
+	[self updateTitleBarAppearance];
+	[self updateToLayout:[self makeLayout]];
+}
+
+- (BOOL)fileTabsHidden
+{
+	return self.showsOnlyLeadingControl || self.alternateTitleBarItems != nil;
+}
+
 - (CGFloat)tabStartInset
 {
-	return MAX(0, self.leadingContentInset) + (_leadingButtons.count ? 2 * kLeadingButtonPadding + kLeadingButtonWidth * _leadingButtons.count : 0);
+	CGFloat inset = MAX(0, self.leadingContentInset);
+	if(_leadingControl)
+		inset += kLeadingButtonPadding + ceil(_leadingControl.fittingSize.width);
+	if(_leadingButtons.count && !self.fileTabsHidden)
+		inset += 2 * kLeadingButtonPadding + kLeadingButtonWidth * _leadingButtons.count;
+	else if(_leadingControl)
+		inset += kLeadingButtonPadding;
+	return inset;
 }
 
 - (NSArray<OakTabFrame*>*)makeLayoutForTabItems:(NSArray<OakTabItem*>*)tabItems inRectOfWidth:(CGFloat)totalWidth
@@ -1881,13 +1935,13 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 - (NSArray<OakTabFrame*>*)makeLayout
 {
-	if(_collapsedTitle && !_dragging)
+	if(self.fileTabsHidden || (_collapsedTitle && !_dragging))
 		return @[];
 
 	static NSString* const firstTabIdentifier = [NSUUID UUID].UUIDString;
 	// Keep tabs clear of the traffic lights, controls, add button, and status label.
 	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame) - self.tabStartInset;
-	if(!_statusTextLabel.hidden)
+	if(_statusTextLabel.stringValue.length)
 		visibleWidth -= NSWidth(_statusTextLabel.frame) + 16;
 	// When the controls leave less than a normal tab width, keep the selected
 	// file reachable and let its title truncate.
@@ -2031,9 +2085,22 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	CGFloat centerY = NSMidY(self.bounds);
 	CGFloat leading = self.tabStartInset;
 	CGFloat buttonX = MAX(0, self.leadingContentInset) + kLeadingButtonPadding;
+	if(_leadingControl)
+	{
+		NSSize size = _leadingControl.fittingSize;
+		CGFloat height = MIN(size.height, NSHeight(self.bounds));
+		_leadingControl.frame = NSMakeRect(buttonX, centerY - height / 2, ceil(size.width), height);
+		buttonX = NSMaxX(_leadingControl.frame) + kLeadingButtonPadding;
+	}
+	if(_alternateTitleBarItems)
+	{
+		_alternateTitleBarItems.frame = self.bounds;
+		if(self.layoutAlternateTitleBarItems) self.layoutAlternateTitleBarItems(buttonX);
+	}
 	CGFloat buttonHeight = MIN(kLeadingButtonHeight, NSHeight(self.bounds));
 	for(NSButton* button in _leadingButtons)
 	{
+		button.hidden = self.fileTabsHidden;
 		button.frame = NSMakeRect(buttonX, centerY - buttonHeight / 2, kLeadingButtonWidth, buttonHeight);
 		buttonX += kLeadingButtonWidth;
 	}
@@ -2049,14 +2116,15 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 
 	CGFloat addButtonHeight = NSHeight(createNewTabButtonFrame);
 	_createNewTabButton.frame = { { x, self.isWindowTitleBar ? centerY - addButtonHeight / 2 : round((height - addButtonHeight) / 2) }, createNewTabButtonFrame.size };
+	_statusTextLabel.hidden = _alternateTitleBarItems || _statusTextLabel.stringValue.length == 0;
 	if(!_statusTextLabel.hidden)
 	{
 		NSSize size = _statusTextLabel.frame.size;
 		_statusTextLabel.frame = NSMakeRect(NSWidth(self.bounds) - 8 - size.width, centerY - size.height / 2, size.width, size.height);
 	}
 	BOOL collapsed = _collapsedTitle && !_dragging;
-	_createNewTabButton.hidden = collapsed;
-	_collapsedTitleLabel.hidden = !collapsed;
+	_createNewTabButton.hidden = collapsed || self.fileTabsHidden;
+	_collapsedTitleLabel.hidden = !collapsed || self.fileTabsHidden;
 	if(collapsed)
 	{
 		CGFloat trailing = _statusTextLabel.hidden ? 0 : NSWidth(_statusTextLabel.frame) + 16;

@@ -1,4 +1,5 @@
 #import "ProjectChanges.h"
+#import "GitRepository.h"
 #import <document/OakDocument Private.h>
 #include <xdiff.h>
 #include <sys/stat.h>
@@ -28,32 +29,44 @@ static NSString* GitExecutable()
 	}
 }
 
-static NSDictionary* Git(NSString* directory, NSArray<NSString*>* arguments)
+}
+
+static NSDictionary* RunWorkspaceCommand(NSString* executable, NSString* directory, NSArray<NSString*>* arguments, BOOL mutation, NSTimeInterval timeout, BOOL git, NSString* index, NSString* input)
 {
-	NSString* executable = GitExecutable();
-	if(!executable) return Error(@"Git was not found. Install the macOS command line tools, or set TM_GIT in ~/.textmate.");
+	if(!directory.length) return Error(@"Open a folder in a Git repository.");
 	NSTask* task = [[NSTask alloc] init];
 	task.executableURL = [NSURL fileURLWithPath:executable];
-	task.arguments = [@[@"--no-optional-locks", @"-c", @"core.fsmonitor=false", @"-C", directory] arrayByAddingObjectsFromArray:arguments];
+	if(!git) task.currentDirectoryURL = [NSURL fileURLWithPath:directory isDirectory:YES];
+	NSArray* options = !git ? @[] : mutation ? @[@"--literal-pathspecs", @"-C", directory] : @[@"--literal-pathspecs", @"--no-optional-locks", @"-c", @"core.fsmonitor=false", @"-C", directory];
+	task.arguments = [options arrayByAddingObjectsFromArray:arguments];
 	NSMutableDictionary* environment = [NSProcessInfo.processInfo.environment mutableCopy];
 	// This view always reviews the requested directory, independently of any
 	// Git overrides inherited when TextMate was launched from a shell.
 	for(NSString* key in [environment.allKeys copy])
 		if([key hasPrefix:@"GIT_"]) [environment removeObjectForKey:key];
-	environment[@"GIT_OPTIONAL_LOCKS"] = @"0";
+	if(index) environment[@"GIT_INDEX_FILE"] = index;
+	if(!mutation) environment[@"GIT_OPTIONAL_LOCKS"] = @"0";
 	environment[@"GIT_TERMINAL_PROMPT"] = @"0";
+	if(!git) {
+		environment[@"GH_PROMPT_DISABLED"] = @"1";
+		environment[@"GH_NO_UPDATE_NOTIFIER"] = @"1";
+		environment[@"GH_NO_EXTENSION_UPDATE_NOTIFIER"] = @"1";
+	}
+	environment[@"PATH"] = [@[environment[@"PATH"] ?: @"/usr/bin:/bin", @"/opt/homebrew/bin", @"/usr/local/bin"] componentsJoinedByString:@":"];
 	task.environment = environment;
 	NSPipe* pipe = [NSPipe pipe];
 	task.standardOutput = pipe;
-	task.standardError = [NSFileHandle fileHandleWithNullDevice];
-	task.standardInput = [NSFileHandle fileHandleWithNullDevice];
+	task.standardError = mutation ? pipe : [NSFileHandle fileHandleWithNullDevice];
+	NSFileHandle* standardInput = input ? [NSFileHandle fileHandleForReadingAtPath:input] : [NSFileHandle fileHandleWithNullDevice];
+	if(!standardInput) return Error(@"Could not open the temporary Git input.");
+	task.standardInput = standardInput;
 	NSError* error;
 	dispatch_semaphore_t exited = dispatch_semaphore_create(0);
 	// Set before launch so an exit that beats the process monitor is still seen.
 	task.terminationHandler = ^(NSTask* task){ dispatch_semaphore_signal(exited); };
-	if(![task launchAndReturnError:&error]) return Error(@"Git could not be started. Install the macOS command line tools and try again.");
+	if(![task launchAndReturnError:&error]) return Error([NSString stringWithFormat:@"Could not start %@: %@", executable.lastPathComponent, error.localizedDescription]);
 	[pipe.fileHandleForWriting closeFile];
-	double deadline = Now()+10;
+	double deadline = Now()+timeout;
 
 	// A readability source replaces polling: it is woken by the pipe instead of
 	// sleeping in 10 ms steps while Git is quiet.
@@ -70,7 +83,7 @@ static NSDictionary* Git(NSString* directory, NSArray<NSString*>* arguments)
 		char bytes[16384];
 		ssize_t count = read(fd, bytes, sizeof(bytes));
 		if(count > 0) {
-			if(output.length + count > fileLimit) problem = @"This change is too large to preview (limit 4 MB).";
+			if(output.length + count > fileLimit) problem = @"Git output is too large to display (limit 4 MB).";
 			else { [output appendBytes:bytes length:count]; return; }
 		} else if(count < 0 && (errno == EAGAIN || errno == EINTR)) return;
 		done = YES;
@@ -78,10 +91,11 @@ static NSDictionary* Git(NSString* directory, NSArray<NSString*>* arguments)
 	});
 	dispatch_source_set_cancel_handler(source, ^{ dispatch_semaphore_signal(stopped); });
 	dispatch_resume(source);
-	if(dispatch_semaphore_wait(eof, At(deadline))) problem = @"Git took too long to respond. Try refreshing the view.";
+	BOOL timedOut = dispatch_semaphore_wait(eof, At(deadline)) != 0;
 	// Cancelling and waiting keeps the descriptor open until no handler can read it.
 	dispatch_source_cancel(source);
 	dispatch_semaphore_wait(stopped, DISPATCH_TIME_FOREVER);
+	if(timedOut) problem = @"Git took too long to respond. Refresh to check the repository state.";
 	// Past the size cap Git would block on the full pipe until the deadline, so stop it now.
 	if(problem && task.running) kill(task.processIdentifier, SIGKILL);
 	if(dispatch_semaphore_wait(exited, At(deadline))) {
@@ -92,6 +106,27 @@ static NSDictionary* Git(NSString* directory, NSArray<NSString*>* arguments)
 	[pipe.fileHandleForReading closeFile];
 	return problem ? Error(problem) : @{ @"data": [output copy], @"status": @(task.terminationStatus) };
 }
+
+NSDictionary* GitWorkspaceCommand(NSString* executable, NSString* directory, NSArray<NSString*>* arguments, BOOL mutation, NSTimeInterval timeout, BOOL git)
+{
+	return RunWorkspaceCommand(executable, directory, arguments, mutation, timeout, git, nil, nil);
+}
+
+NSDictionary* GitRepositoryCommandWithIndex(NSString* directory, NSArray<NSString*>* arguments, NSString* index, NSString* input)
+{
+	NSString* executable = GitExecutable();
+	if(!executable) return Error(@"Git was not found. Install the macOS command line tools, or set TM_GIT in ~/.textmate.");
+	return RunWorkspaceCommand(executable, directory, arguments, YES, 30, YES, index, input);
+}
+
+NSDictionary* GitRepositoryCommand(NSString* directory, NSArray<NSString*>* arguments, BOOL mutation, NSTimeInterval timeout)
+{
+	NSString* executable = GitExecutable();
+	if(!executable) return Error(@"Git was not found. Install the macOS command line tools, or set TM_GIT in ~/.textmate.");
+	return GitWorkspaceCommand(executable, directory, arguments, mutation, timeout, YES);
+}
+
+namespace {
 static NSString* Status(NSString* flags, BOOL unsaved)
 {
 	NSString* status = [flags containsString:@"U"] || [@[@"AA", @"DD"] containsObject:flags] ? @"Conflict" :
@@ -166,47 +201,81 @@ static NSData* ReadFile(NSString* path, NSString** error)
 }
 @end
 
-NSDictionary* ProjectChangesSnapshot(NSString* directory, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers)
+NSDictionary* ProjectChangesRevision(NSString* directory)
 {
 	// One `rev-parse` yields the work tree root and HEAD together. The root is
 	// still printed when HEAD is unborn, which is how a repository without
 	// commits is recognised without a second call.
-	NSDictionary* revision = Git(directory, @[@"rev-parse", @"--show-toplevel", @"--verify", @"HEAD"]);
-	NSString* root = nil;
-	NSString* head = nil;
-	if(!revision[@"error"]) {
-		NSArray<NSString*>* lines = [[[NSString alloc] initWithData:revision[@"data"] encoding:NSUTF8StringEncoding] componentsSeparatedByString:@"\n"];
-		if(lines.count > 0 && lines[0].length) root = lines[0];
-		if(lines.count > 1 && lines[1].length) head = lines[1];
+	NSDictionary* revision = GitRepositoryCommand(directory, @[@"rev-parse", @"--show-toplevel", @"--verify", @"HEAD"]);
+	NSString* output = [[NSString alloc] initWithData:revision[@"data"] ?: [NSData data] encoding:NSUTF8StringEncoding];
+	if(![output hasSuffix:@"\n"]) return Error(revision[@"error"] ?: @"Open a folder in a Git repository to review its changes.");
+	output = [output substringToIndex:output.length-1];
+	if(![revision[@"status"] intValue]) {
+		NSRange separator = [output rangeOfString:@"\n" options:NSBackwardsSearch];
+		if(separator.location != NSNotFound)
+			return @{ @"root": [output substringToIndex:separator.location], @"head": [output substringFromIndex:NSMaxRange(separator)] };
 	}
-	if(!root.length) return Error(revision[@"error"] ?: @"Open a folder in a Git repository to review its changes.");
+	return output.length ? @{ @"root": output, @"head": @"" } : Error(@"Open a folder in a Git repository to review its changes.");
+}
+
+NSString* ProjectChangesBufferAbsolutePath(NSString* path)
+{
+	char resolved[PATH_MAX];
+	NSString* parent = path.stringByDeletingLastPathComponent;
+	return [(realpath(parent.fileSystemRepresentation, resolved) ? @(resolved) : parent) stringByAppendingPathComponent:path.lastPathComponent];
+}
+
+NSDictionary* ProjectChangesSnapshot(NSString* directory, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, BOOL groupUntrackedDirectories)
+{
+	NSDictionary* revision = ProjectChangesRevision(directory);
+	NSString* root = revision[@"root"];
+	if(!root) return revision;
 	// `--branch` puts the branch name in the same call as the status entries,
 	// so the two can no longer disagree and cannot cost two deadlines.
-	NSDictionary* status = Git(root, @[@"status", @"--porcelain=v1", @"-z", @"--branch", @"--untracked-files=all", @"--no-renames"]);
+	NSString* untrackedOption = groupUntrackedDirectories ? @"--untracked-files=normal" : @"--untracked-files=all";
+	NSDictionary* status = GitRepositoryCommand(root, @[@"status", @"--porcelain=v1", @"-z", @"--branch", untrackedOption, @"--no-renames"]);
 	if(status[@"error"] || [status[@"status"] intValue]) return Error(status[@"error"] ?: @"The repository's changed files could not be read.");
 	NSData* data = status[@"data"];
 	NSMutableDictionary<NSString*, NSString*>* paths = [NSMutableDictionary dictionary];
+	NSMutableSet<NSString*>* untracked = [NSMutableSet set];
 	NSString* branch = nil;
+	NSString* tracking = @"";
 	char const* bytes = static_cast<char const*>(data.bytes);
 	NSUInteger start = 0;
 	for(NSUInteger i = 0; i < data.length; ++i) if(bytes[i] == '\0') {
 		if(i-start > 3 && bytes[start] == '#' && bytes[start+1] == '#') {
-			branch = BranchName([[NSString alloc] initWithBytes:bytes+start+3 length:i-start-3 encoding:NSUTF8StringEncoding]);
+			NSString* header = [[NSString alloc] initWithBytes:bytes+start+3 length:i-start-3 encoding:NSUTF8StringEncoding];
+			branch = BranchName(header);
+			if(branch && [header hasPrefix:[branch stringByAppendingString:@"..."]])
+				tracking = [header substringFromIndex:branch.length+3];
 		} else if(i-start >= 4) {
 			NSString* flags = [[NSString alloc] initWithBytes:bytes+start length:2 encoding:NSUTF8StringEncoding];
 			NSString* path = [[NSString alloc] initWithBytes:bytes+start+3 length:i-start-3 encoding:NSUTF8StringEncoding];
-			if(path && flags) paths[path] = flags;
+			if(path && [flags isEqual:@"??"]) [untracked addObject:path];
+			else if(path && flags) paths[path] = flags;
 		}
 		start = i+1;
 	}
+	for(NSString* path in untracked)
+		if(!paths[path]) paths[path] = @"??";
+	NSDictionary* diskPaths = [paths copy];
 	NSMutableDictionary* bufferPaths = [NSMutableDictionary dictionary];
+	NSMutableSet* editedDirectories = [NSMutableSet set];
 	for(NSString* original in buffers) {
-		char resolved[PATH_MAX];
-		NSString* parent = [original stringByDeletingLastPathComponent];
-		NSString* absolute = [(realpath(parent.fileSystemRepresentation, resolved) ? @(resolved) : parent) stringByAppendingPathComponent:original.lastPathComponent];
 		// Comparing component-wise, rather than with a "root/" prefix, keeps a
 		// repository checked out at "/" able to match its unsaved buffers.
-		if(NSString* relative = PathRelativeTo(absolute, root)) {
+		if(NSString* relative = PathRelativeTo(ProjectChangesBufferAbsolutePath(original), root)) {
+			BOOL grouped = NO;
+			if(groupUntrackedDirectories) {
+				for(NSString* parent = relative.stringByDeletingLastPathComponent; parent.length; parent = parent.stringByDeletingLastPathComponent) {
+					NSString* folder = [parent stringByAppendingString:@"/"];
+					if(![untracked containsObject:folder]) continue;
+					[editedDirectories addObject:folder];
+					grouped = YES;
+					break;
+				}
+			}
+			if(grouped) continue;
 			if(!paths[relative]) paths[relative] = @" M";
 			bufferPaths[relative] = original;
 		}
@@ -214,22 +283,25 @@ NSDictionary* ProjectChangesSnapshot(NSString* directory, NSDictionary<NSString*
 	NSMutableArray* files = [NSMutableArray array];
 	for(NSString* path in [paths.allKeys sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
 		NSString* absolute = [root stringByAppendingPathComponent:path];
-		BOOL unsaved = bufferPaths[path] != nil;
-		[files addObject:@{ @"path": path, @"absolutePath": absolute, @"flags": paths[path],
-			@"status": Status(paths[path], unsaved), @"unsaved": @(unsaved), @"bufferPath": bufferPaths[path] ?: absolute }];
+		BOOL isUntracked = [untracked containsObject:path];
+		BOOL isDirectory = isUntracked && [path hasSuffix:@"/"];
+		BOOL unsaved = bufferPaths[path] != nil || [editedDirectories containsObject:path];
+		NSString* flags = isUntracked && [paths[path] hasPrefix:@"D"] ? @" M" : paths[path];
+		[files addObject:@{ @"path": path, @"absolutePath": absolute, @"flags": flags, @"untracked": @(isUntracked), @"directory": @(isDirectory),
+			@"diskFlags": diskPaths[path] ?: @"  ", @"status": Status(flags, unsaved), @"unsaved": @(unsaved), @"bufferPath": bufferPaths[path] ?: absolute }];
 	}
-	return @{ @"root": root, @"files": files, @"head": head ?: @"", @"branch": branch ?: @"Detached HEAD" };
+	return @{ @"root": root, @"files": files, @"head": revision[@"head"], @"branch": branch ?: @"Detached HEAD", @"tracking": tracking };
 }
 
-NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers)
+static NSDictionary* DiffFromBaseline(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, BOOL fromIndex, NSUInteger contextLines, BOOL ignoreWhitespace)
 {
 	NSData* before = [NSData data];
 	NSString* flags = file[@"flags"];
-	if([snapshot[@"head"] length]) {
-		NSDictionary* blob = Git(snapshot[@"root"], @[@"cat-file", @"blob", [NSString stringWithFormat:@"%@:%@", snapshot[@"head"], file[@"path"]]]);
+	if(fromIndex || [snapshot[@"head"] length]) {
+		NSDictionary* blob = GitRepositoryCommand(snapshot[@"root"], @[@"cat-file", @"blob", [NSString stringWithFormat:@"%@:%@", fromIndex ? @"" : snapshot[@"head"], file[@"path"]]]);
 		if(blob[@"error"]) return Error(blob[@"error"]);
 		if([blob[@"status"] intValue]) {
-			if(![flags containsString:@"A"] && ![flags containsString:@"?"])
+			if(!fromIndex && ![flags containsString:@"A"] && ![flags containsString:@"?"])
 				return Error(@"The committed version is not a text file or could not be read. Refresh and try again.");
 		} else before = blob[@"data"];
 	}
@@ -238,7 +310,7 @@ NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSD
 	if(ProjectChangesBuffer* buffer = buffers[file[@"bufferPath"]]) {
 		after = buffer.data;
 		if(!after) return Error(@"This unsaved buffer is too large to preview (limit 4 MB).");
-	} else if([flags containsString:@"D"]) after = [NSData data];
+	} else if(fromIndex ? [flags hasSuffix:@"D"] : [flags containsString:@"D"]) after = [NSData data];
 	else after = ReadFile(file[@"absolutePath"], &problem);
 	if(!after) return Error(problem ?: @"The current file could not be read.");
 	if(memchr(before.bytes, 0, before.length) || memchr(after.bytes, 0, after.length))
@@ -254,9 +326,9 @@ NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSD
 	}
 	mmfile_t a = { (char*)before.bytes, (long)before.length }, b = { (char*)after.bytes, (long)after.length };
 	xpparam_t parameters = {};
-	parameters.flags = XDF_HISTOGRAM_DIFF;
+	parameters.flags = XDF_HISTOGRAM_DIFF | (ignoreWhitespace ? XDF_IGNORE_WHITESPACE : 0);
 	xdemitconf_t config = {};
-	config.ctxlen = 3;
+	config.ctxlen = MIN(contextLines, 1000000000UL);
 	NSMutableData* output = [NSMutableData data];
 	xdemitcb_t callback = {};
 	callback.priv = (__bridge void*)output;
@@ -284,6 +356,16 @@ NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSD
 		if([line hasPrefix:@"+"]) ++added;
 		if([line hasPrefix:@"-"]) ++removed;
 	}
-	return @{ @"text": diff.length ? diff : @"No text differences against the last commit. File permissions or the staging area may differ.",
+	return @{ @"text": diff.length ? diff : ignoreWhitespace ? @"No differences to display with whitespace ignored." : fromIndex ? @"No text differences against the index." : @"No text differences against the last commit. File permissions or the staging area may differ.",
 		@"hunks": hunks, @"added": @(added), @"removed": @(removed) };
+}
+
+NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, NSUInteger contextLines, BOOL ignoreWhitespace)
+{
+	return DiffFromBaseline(snapshot, file, buffers, NO, contextLines, ignoreWhitespace);
+}
+
+NSDictionary* ProjectChangesIndexToBufferDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, NSUInteger contextLines, BOOL ignoreWhitespace)
+{
+	return DiffFromBaseline(snapshot, file, buffers, YES, contextLines, ignoreWhitespace);
 }

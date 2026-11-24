@@ -109,7 +109,7 @@ namespace
 }
 
 @interface OutlineViewController () <NSOutlineViewDataSource, NSOutlineViewDelegate>
-@property (nonatomic) NSOutlineView* outlineView;
+@property (nonatomic) OakSidebarTreeView* outlineView;
 @property (nonatomic) NSArray<OutlineSymbolItem*>* roots;
 @property (nonatomic) NSArray<OutlineSymbolItem*>* flatItems; // depth-first, document order
 @property (nonatomic) NSMutableSet<NSString*>* expandedKeys;
@@ -147,6 +147,7 @@ namespace
 	_outlineView.style                    = NSTableViewStylePlain;
 	_outlineView.backgroundColor          = NSColor.controlBackgroundColor;
 	_outlineView.rowHeight                = 21;
+	_outlineView.rootIndentation          = kOakSidebarIndentation;
 	_outlineView.delegate                 = self;
 	_outlineView.dataSource               = self;
 	_outlineView.target                   = self;
@@ -484,7 +485,7 @@ namespace
 
 - (NSTableRowView*)outlineView:(NSOutlineView*)outlineView rowViewForItem:(id)item
 {
-	return [(OakSidebarTreeView*)outlineView makeTreeRowView];
+	return [self.outlineView makeTreeRowView];
 }
 
 - (NSView*)outlineView:(NSOutlineView*)outlineView viewForTableColumn:(NSTableColumn*)tableColumn item:(OutlineSymbolItem*)item

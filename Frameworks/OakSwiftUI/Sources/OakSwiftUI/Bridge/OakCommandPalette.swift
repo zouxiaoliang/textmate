@@ -25,17 +25,6 @@ private class KeyablePanel: NSPanel {
 	}
 
 	@objc public func show(in parentWindow: NSWindow, items: [OakCommandPaletteItem]) {
-		// Tear down existing panel without notifying delegate
-		if let p = panel {
-			p.parent?.removeChildWindow(p)
-			p.orderOut(nil)
-			panel = nil
-			viewModel = nil
-			cancellables.removeAll()
-		}
-
-		self.parentWindow = parentWindow
-
 		let vm = CommandPaletteViewModel()
 
 		let commands = items.filter {
@@ -46,22 +35,61 @@ private class KeyablePanel: NSPanel {
 		let projects = items.filter { $0.category == .recentProject }
 		vm.setItems(projects, forMode: .recentProjects)
 
-		vm.onItemSelected = { [weak self] item in
-			guard let self else { return }
-			let parent = self.parentWindow
-			self.dismissWithoutNotify()
-			// Re-focus parent window so responder chain actions work
-			parent?.makeKeyAndOrderFront(nil)
-			self.delegate?.commandPaletteDidSelectItem(item)
-		}
-		vm.onDismiss = { [weak self] in
-			self?.dismiss()
-		}
 		vm.onModeSwitch = { [weak self] mode in
 			self?.delegate?.commandPaletteRequestItems(forMode: mode.intValue) ?? []
 		}
 		vm.onSearchDocument = { [weak self] query in
 			self?.delegate?.commandPaletteSearchDocument(query) ?? []
+		}
+		present(in: parentWindow, model: vm) { [weak self] item in
+			self?.delegate?.commandPaletteDidSelectItem(item)
+		}
+	}
+
+	@objc public func show(in parentWindow: NSWindow?, items: [OakCommandPaletteItem], label: String,
+	                       placeholder: String, suggestions: @escaping (String) -> [OakCommandPaletteItem],
+	                       onSelect: @escaping (OakCommandPaletteItem) -> Void) {
+		let vm = CommandPaletteViewModel(label: label, placeholder: placeholder, suggestions: suggestions)
+		vm.setItems(items, forMode: .commands)
+		present(in: parentWindow, model: vm, onSelect: onSelect)
+	}
+
+	@objc public func showManaging(in parentWindow: NSWindow?, items: [OakCommandPaletteItem], label: String,
+	                               placeholder: String, onOpen: @escaping ([OakCommandPaletteItem]) -> Void,
+	                               onRemove: @escaping (OakCommandPaletteItem) -> Bool) {
+		let vm = CommandPaletteViewModel(label: label, placeholder: placeholder) { _ in [] }
+		vm.setItems(items, forMode: .commands)
+		vm.onItemRemoved = onRemove
+		vm.onItemsSelected = { [weak self] items in
+			guard let self else { return }
+			self.finishSelection()
+			onOpen(items)
+		}
+		present(in: parentWindow, model: vm)
+	}
+
+	private func finishSelection() {
+		let parent = parentWindow
+		dismissWithoutNotify()
+		// Re-focus the parent before running responder chain actions.
+		parent?.makeKeyAndOrderFront(nil)
+	}
+
+	private func present(in parentWindow: NSWindow?, model vm: CommandPaletteViewModel, onSelect: ((OakCommandPaletteItem) -> Void)? = nil) {
+		dismissWithoutNotify()
+		self.parentWindow = parentWindow
+		if let onSelect {
+			vm.onItemSelected = { [weak self] item in
+				guard let self else { return }
+				self.finishSelection()
+				onSelect(item)
+			}
+		}
+		vm.onDismiss = { [weak self] in
+			guard let self else { return }
+			let parent = self.parentWindow
+			self.dismiss()
+			parent?.makeKey()
 		}
 
 		self.viewModel = vm
@@ -71,8 +99,8 @@ private class KeyablePanel: NSPanel {
 
 		let hostingView = NSHostingView(rootView: rootView)
 
-		let parentFrame = parentWindow.frame
-		let panelWidth = min(max(parentFrame.width * 0.5, 400), 700)
+		let parentFrame = parentWindow?.frame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 650)
+		let panelWidth = parentWindow == nil ? CGFloat(560) : min(max(parentFrame.width * 0.5, 400), 700)
 		let panelHeight: CGFloat = 400
 
 		var panelFrame = NSRect(x: parentFrame.origin.x + (parentFrame.width - panelWidth) / 2,
@@ -81,7 +109,9 @@ private class KeyablePanel: NSPanel {
 
 		// Restore the user's last position, stored as an offset from the parent window origin
 		// so the palette follows whichever window (or screen) it is opened from.
-		if let offsets = UserDefaults.standard.array(forKey: Self.frameOffsetKey) as? [CGFloat], offsets.count == 2 {
+		if parentWindow == nil {
+			panelFrame.origin.y = parentFrame.maxY - parentFrame.height * 0.2 - panelHeight
+		} else if let offsets = UserDefaults.standard.array(forKey: Self.frameOffsetKey) as? [CGFloat], offsets.count == 2 {
 			panelFrame.origin = NSPoint(x: parentFrame.origin.x + offsets[0], y: parentFrame.origin.y + offsets[1])
 		}
 
@@ -101,7 +131,7 @@ private class KeyablePanel: NSPanel {
 		p.contentView = hostingView
 		p.delegate = self
 
-		parentWindow.addChildWindow(p, ordered: .above)
+		parentWindow?.addChildWindow(p, ordered: .above)
 		p.makeKeyAndOrderFront(nil)
 
 		self.panel = p
@@ -119,6 +149,7 @@ private class KeyablePanel: NSPanel {
 
 	private func dismissWithoutNotify() {
 		guard let p = panel else { return }
+		p.delegate = nil
 		p.parent?.removeChildWindow(p)
 		p.orderOut(nil)
 		panel = nil
@@ -173,7 +204,10 @@ private class KeyablePanel: NSPanel {
 	}
 
 	nonisolated public func windowDidResignKey(_ notification: Notification) {
+		guard let window = notification.object as? NSWindow else { return }
+		let identity = ObjectIdentifier(window)
 		Task { @MainActor in
+			guard let panel = self.panel, ObjectIdentifier(panel) == identity else { return }
 			self.dismiss()
 		}
 	}

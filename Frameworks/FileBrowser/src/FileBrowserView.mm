@@ -6,6 +6,7 @@
 
 @interface FileBrowserView () <NSAccessibilityGroup>
 @property (nonatomic) NSScrollView* scrollView;
+@property (nonatomic) NSLayoutConstraint* collapsedScrollHeight;
 @end
 
 @implementation FileBrowserView
@@ -18,6 +19,8 @@
 
 		_headerView    = [[OFBHeaderView alloc] initWithFrame:NSZeroRect];
 		_actionsView   = [[OFBActionsView alloc] initWithFrame:NSZeroRect];
+		_headerView.folderDisclosureButton.target = self;
+		_headerView.folderDisclosureButton.action = @selector(toggleFolderCollapsed:);
 
 		_outlineView = [[FileBrowserOutlineView alloc] initWithFrame:NSZeroRect];
 		_outlineView.accessibilityLabel       = @"Files";
@@ -59,10 +62,38 @@
 
 		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[files(==header)]|" options:0 metrics:nil views:views]];
 		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[header][files]|" options:NSLayoutFormatAlignAllLeading metrics:nil views:views]];
+		_collapsedScrollHeight = [_scrollView.heightAnchor constraintEqualToConstant:0];
 		_scrollView.automaticallyAdjustsContentInsets = NO;
 		_outlineView.backgroundColor = NSColor.controlBackgroundColor;
 		_scrollView.drawsBackground  = NO;
 	}
 	return self;
+}
+
+- (void)setFolderCollapsed:(BOOL)collapsed
+{
+	if(_folderCollapsed == collapsed)
+		return;
+	NSResponder* responder = self.window.firstResponder;
+	if(collapsed && [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:self.scrollView])
+	{
+		if(![self.window makeFirstResponder:self.headerView.folderDisclosureButton])
+			return;
+	}
+
+	if(!collapsed)
+		self.collapsedScrollHeight.active = NO;
+	_folderCollapsed = collapsed;
+	self.scrollView.hidden = collapsed;
+	[self.headerView updateFolderDisclosureForCollapsed:collapsed];
+	if(self.folderCollapseDidChange)
+		self.folderCollapseDidChange();
+	if(collapsed)
+		self.collapsedScrollHeight.active = YES;
+}
+
+- (IBAction)toggleFolderCollapsed:(id)sender
+{
+	self.folderCollapsed = !self.folderCollapsed;
 }
 @end

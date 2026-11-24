@@ -28,6 +28,14 @@ static NSPopUpButton* OakCreateFolderPopUpButton ()
 {
 	if(self = [super initWithFrame:aRect])
 	{
+		_folderDisclosureButton = [NSButton buttonWithTitle:@"" target:nil action:nil];
+		_folderDisclosureButton.bordered = NO;
+		_folderDisclosureButton.imagePosition = NSImageOnly;
+		_folderDisclosureButton.imageScaling = NSImageScaleNone;
+		_folderDisclosureButton.accessibilityRole = NSAccessibilityDisclosureTriangleRole;
+		_folderDisclosureButton.accessibilityLabel = @"Current folder contents";
+		[self updateFolderDisclosureForCollapsed:NO];
+
 		self.folderPopUpButton       = OakCreateFolderPopUpButton();
 		self.goBackButton            = OakCreateImageButton(NSImageNameGoLeftTemplate);
 		self.goBackButton.toolTip    = @"Go Back";
@@ -39,6 +47,7 @@ static NSPopUpButton* OakCreateFolderPopUpButton ()
 		self.goForwardButton.image.accessibilityDescription = self.goForwardButton.toolTip;
 
 		NSDictionary* views = @{
+			@"disclosure":    self.folderDisclosureButton,
 			@"folder":        self.folderPopUpButton,
 			@"divider":       OakCreateNSBoxSeparator(),
 			@"back":          self.goBackButton,
@@ -46,11 +55,24 @@ static NSPopUpButton* OakCreateFolderPopUpButton ()
 		};
 
 		OakAddAutoLayoutViewsToSuperview([views allValues], self);
-		OakSetupKeyViewLoop(@[ self, _folderPopUpButton, _goBackButton, _goForwardButton ]);
+		OakSetupKeyViewLoop(@[ self, _folderDisclosureButton, _folderPopUpButton, _goBackButton, _goForwardButton ]);
 
-		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-(3)-[folder(>=75)]-(3)-[divider(==1)]-(2)-[back(==22)]-(2)-[forward(==back)]-(3)-|" options:NSLayoutFormatAlignAllCenterY metrics:nil views:views]];
+		NSDictionary* metrics = @{
+			@"disclosureInset": @(kOakSidebarDisclosureCenter - 9),
+		};
+		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-disclosureInset-[disclosure(18)][folder(>=20)]-3-[divider(1)]-2-[back(22)]-2-[forward(==back)]-3-|" options:NSLayoutFormatAlignAllCenterY metrics:metrics views:views]];
 		[self addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|-4-[divider(==15)]-4-|" options:0 metrics:nil views:views]];
+		[_folderDisclosureButton.heightAnchor constraintEqualToConstant:20].active = YES;
 	}
 	return self;
+}
+
+- (void)updateFolderDisclosureForCollapsed:(BOOL)collapsed
+{
+	static NSImage* const collapsedChevron = OakSidebarDisclosureImage(NO, 12);
+	static NSImage* const expandedChevron = OakSidebarDisclosureImage(YES, 12);
+	self.folderDisclosureButton.image = collapsed ? collapsedChevron : expandedChevron;
+	self.folderDisclosureButton.accessibilityExpanded = !collapsed;
+	self.folderDisclosureButton.toolTip = collapsed ? @"Expand current folder" : @"Collapse current folder";
 }
 @end

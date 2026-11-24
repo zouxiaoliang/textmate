@@ -8,6 +8,9 @@
 #import "EditorContextChanges.h"
 #import "BufferEditProposal.h"
 #import "ProjectChangesWindowController.h"
+#import "SourceControlViewController.h"
+#import "GitWorkspaceViewController.h"
+#import "GitDiffView.h"
 #import <selection/selection.h>
 #import <EditorContextProtocol.h>
 #import <document/OakDocument Private.h>
@@ -133,7 +136,10 @@ static NSArray<NSArray<NSString*>*>* workspace_shortcuts (std::initializer_list<
 typedef NS_OPTIONS(NSUInteger, SidebarSections) {
 	SidebarSectionProject = 1 << 0,
 	SidebarSectionOutline = 1 << 1,
+	SidebarSectionSourceControl = 1 << 2,
 };
+
+typedef NS_ENUM(NSInteger, WorkspaceMode) { WorkspaceModeEditor, WorkspaceModeGit };
 
 enum class title_bar_icon { back, forward, sidebar_left, sidebar_right };
 
@@ -225,6 +231,13 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 @property (nonatomic) NSMutableDictionary<NSString*, BufferEditProposal*>* editProposals;
 @property (nonatomic) NSMutableArray<NSString*>* editProposalOrder;
 @property (nonatomic) ProjectChangesWindowController* projectChangesController;
+@property (nonatomic) SourceControlViewController* sourceControlController;
+@property (nonatomic) GitWorkspaceViewController* gitWorkspaceController;
+@property (nonatomic) GitChangeWindowController* gitChangeController;
+@property (nonatomic) BOOL sourceControlVisible;
+@property (nonatomic) WorkspaceMode workspaceMode;
+@property (nonatomic) NSSegmentedControl* workspaceModeControl;
+@property (nonatomic, weak) NSView* editorModeResponder;
 @property (nonatomic) NSUInteger editorNavigationGeneration;
 @property (nonatomic) NSButton*                   navigateBackButton;
 @property (nonatomic) NSButton*                   navigateForwardButton;
@@ -326,7 +339,7 @@ namespace
 	}
 }
 
-static NSArray* const kObservedKeyPaths = @[ @"textView.selectionString", @"textView.font", @"textView.fontScaleFactor", @"textView.themeUUID", @"selectedDocument.fileType", @"selectedDocument", @"arrayController.arrangedObjects.path", @"arrayController.arrangedObjects.displayName", @"arrayController.arrangedObjects.documentEdited", @"selectedDocument.path", @"selectedDocument.displayName", @"selectedDocument.icon", @"selectedDocument.onDisk" , @"selectedDocument.documentEdited" ];
+static NSArray* const kObservedKeyPaths = @[ @"textView.selectionString", @"textView.font", @"textView.fontScaleFactor", @"textView.themeUUID", @"textView.softWrap", @"selectedDocument.fileType", @"selectedDocument", @"arrayController.arrangedObjects.path", @"arrayController.arrangedObjects.displayName", @"arrayController.arrangedObjects.documentEdited", @"selectedDocument.path", @"selectedDocument.displayName", @"selectedDocument.icon", @"selectedDocument.onDisk" , @"selectedDocument.documentEdited" ];
 
 @implementation DocumentWindowController
 
@@ -636,12 +649,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		__weak DocumentWindowController* sidebarController = self;
 		self.layoutView.sidebarStateDidChange = ^(ProjectLayoutView* layoutView){
 			DocumentWindowController* controller = sidebarController;
-			controller.outlineViewController.panelVisible = controller.outlineVisible && !layoutView.outlineCollapsed;
+			[controller updateSidebarPanelVisibility];
+			[controller updateSidebarButton];
 			[[controller class] scheduleSessionBackup:controller];
 		};
 		self.layoutView.sidebarDidRequestClose = ^{
 			DocumentWindowController* controller = sidebarController;
-			if(controller.fileBrowserVisible || controller.outlineVisible)
+			if(controller.visibleSidebarSections)
 			{
 				// A divider drag changes the editor/sidebar split, never the window frame.
 				controller.sidebarFrameBeforeOpening = controller.sidebarFrameAfterOpening = NSZeroRect;
@@ -669,6 +683,17 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.navigateBackButton = title_bar_button(title_bar_icon::back, @"Navigate Back", self.textView, @selector(navigateBack:));
 		self.navigateForwardButton = title_bar_button(title_bar_icon::forward, @"Navigate Forward", self.textView, @selector(navigateForward:));
 		self.sidebarButton = title_bar_button(title_bar_icon::sidebar_left, @"Show Sidebar", self, @selector(toggleSidebar:));
+		self.workspaceModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Editor", @"Git"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changeWorkspaceMode:)];
+		self.workspaceModeControl.controlSize = NSControlSizeSmall;
+		self.workspaceModeControl.segmentStyle = NSSegmentStyleRounded;
+		self.workspaceModeControl.selectedSegment = WorkspaceModeEditor;
+		self.workspaceModeControl.accessibilityLabel = @"Workspace mode";
+		[self.workspaceModeControl setToolTip:@"Switch to Editor mode" forSegment:WorkspaceModeEditor];
+		[self.workspaceModeControl setToolTip:@"Switch to Git mode" forSegment:WorkspaceModeGit];
+		self.tabBarView.leadingControl = self.workspaceModeControl;
+		self.tabBarView.layoutAlternateTitleBarItems = ^(CGFloat leadingControlsEnd){
+			[sidebarController.gitWorkspaceController layoutTitleBarAfterLeadingControls:leadingControlsEnd];
+		};
 		self.tabBarView.leadingButtons = @[ self.navigateBackButton, self.navigateForwardButton, self.sidebarButton ];
 		[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(navigationHistoryDidChange:) name:OakNavigationHistoryDidChangeNotification object:OakNavigationHistory.sharedInstance];
 		[self navigationHistoryDidChange:nil];
@@ -890,6 +915,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.editReviewController = nil;
 	[self.projectChangesController close];
 	self.projectChangesController = nil;
+	self.gitWorkspaceController.active = NO;
+	[self.gitWorkspaceController.viewIfLoaded removeFromSuperview];
+	self.tabBarView.alternateTitleBarItems = nil;
+	self.gitWorkspaceController = nil;
+	[self.gitChangeController close];
+	self.gitChangeController = nil;
 	[self.terminalPanelController stopTerminal];
 	if((([self.window styleMask] & NSWindowStyleMaskFullScreen) != NSWindowStyleMaskFullScreen) && !self.window.isZoomed)
 		[NSUserDefaults.standardUserDefaults setObject:NSStringFromRect([self windowFrame]) forKey:@"DocumentControllerWindowFrame"];
@@ -903,6 +934,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.documents           = nil;
 	self.selectedDocument    = nil;
 	self.fileBrowserVisible  = NO; // Make window frame small as we no longer respond to savableWindowFrame
+	self.sourceControlVisible = NO;
 	self.outlineVisible      = NO;
 	self.identifier          = nil; // This removes us from AllControllers and causes a release
 }
@@ -936,7 +968,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[self.emptyStateView setFileShortcuts:files toolShortcuts:tools];
 }
 
-- (void)makeTextViewFirstResponder:(id)sender { [self.window makeFirstResponder:self.textView]; }
+- (void)makeTextViewFirstResponder:(id)sender { if(self.workspaceMode == WorkspaceModeEditor) [self.window makeFirstResponder:self.textView]; }
 - (void)close                                 { [self.window close]; }
 
 - (IBAction)moveFocus:(id)sender
@@ -945,6 +977,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	{
 		self.fileBrowserVisible = YES;
 		self.layoutView.fileBrowserCollapsed = NO;
+		self.layoutView.fileBrowserView.folderCollapsed = NO;
 		NSOutlineView* outlineView = self.fileBrowser.outlineView;
 		[self.window makeFirstResponder:outlineView];
 		if([outlineView numberOfSelectedRows] == 0)
@@ -960,6 +993,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 	else
 	{
+		self.workspaceMode = WorkspaceModeEditor;
 		[self makeTextViewFirstResponder:sender];
 	}
 }
@@ -1097,7 +1131,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 // Closing the window outright would end its running shells without asking.
 - (BOOL)keepsWindowWithoutDocuments
 {
-	return self.fileBrowserVisible || self.terminalPanelController.terminalSessionIdentifiers.count;
+	return self.fileBrowserVisible || self.sourceControlVisible || self.terminalPanelController.terminalSessionIdentifiers.count;
 }
 
 - (void)closeTabsAtIndexes:(NSIndexSet*)anIndexSet askToSaveChanges:(BOOL)askToSaveFlag activate:(BOOL)activateFlag
@@ -1154,6 +1188,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)performClose:(id)sender
 {
+	if(self.workspaceMode == WorkspaceModeGit)
+		return [self.window performClose:sender];
 	[self.tabBarView performClose:sender];
 }
 
@@ -1178,6 +1214,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 - (void)closeProjectAfterConfirmation
 {
 	BOOL showFileBrowser = self.fileBrowserVisible;
+	BOOL showSourceControl = self.sourceControlVisible;
 	BOOL showOutline = self.outlineVisible;
 	BOOL disableResize = self.disableFileBrowserWindowResize;
 	self.disableFileBrowserWindowResize = YES;
@@ -1185,6 +1222,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[self clearProjectContents];
 	self.defaultProjectPath = nil;
 	self.fileBrowserVisible = NO;
+	self.sourceControlVisible = NO;
 	self.outlineVisible = NO;
 	[NSNotificationCenter.defaultCenter removeObserver:self name:FileBrowserDidDuplicateNotification object:nil];
 	self.fileBrowser = nil;
@@ -1193,6 +1231,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.projectPath = nil;
 	self.documentPath = nil;
 	self.fileBrowserVisible = showFileBrowser;
+	self.sourceControlVisible = showSourceControl;
 	self.outlineVisible = showOutline;
 	self.disableFileBrowserWindowResize = disableResize;
 	[self.window makeFirstResponder:nil];
@@ -1496,6 +1535,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)anObject change:(NSDictionary*)change context:(void*)context
 {
+	if([keyPath isEqual:@"textView.softWrap"])
+	{
+		[self updateGitSoftWrap];
+		return;
+	}
 	if([keyPath isEqual:@"textView.selectionString"])
 	{
 		self.outlineViewController.selectionString = [change objectForKey:NSKeyValueChangeNewKey];
@@ -1771,6 +1815,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)openAndSelectDocument:(OakDocument*)document activate:(BOOL)activateFlag
 {
+	if(activateFlag) self.workspaceMode = WorkspaceModeEditor;
 	[document loadModalForWindow:self.window completionHandler:^(OakDocumentIOResult result, NSString* errorMessage, oak::uuid_t const& filterUUID){
 		if(![self.documents containsObject:document])
 		{
@@ -2075,12 +2120,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
 	BOOL fullScreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
 	BOOL oneDocument = self.documents.count == 1 && ![defaults boolForKey:kUserDefaultsDisableTabBarCollapsingKey];
-	BOOL hidden = fullScreen && (oneDocument || [defaults boolForKey:kUserDefaultsHideTabsInFullScreenKey]);
+	BOOL hideTabs = fullScreen && (oneDocument || [defaults boolForKey:kUserDefaultsHideTabsInFullScreenKey]);
 	NSInteger customHeight = NormalizeTitleBarHeight([defaults integerForKey:kUserDefaultsTitleBarHeightKey]);
-	CGFloat height = hidden ? 0 : (customHeight ?: self.automaticTitleBarHeight);
+	CGFloat height = customHeight ?: (self.workspaceMode == WorkspaceModeGit ? MAX(48, self.automaticTitleBarHeight) : self.automaticTitleBarHeight);
 	if(self.tabBarHeightConstraint.constant != height)
 		self.tabBarHeightConstraint.constant = height;
-	self.tabBarView.hidden = hidden;
+	self.tabBarView.showsOnlyLeadingControl = hideTabs;
 	self.tabBarView.collapsedTitle = !fullScreen && (oneDocument || self.documents.count == 0) ? self.window.title : nil;
 	[self alignWindowButtonsAtHeight:height];
 }
@@ -2264,6 +2309,9 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(_projectPath != newProjectPath && ![_projectPath isEqualToString:newProjectPath])
 	{
 		_projectPath = newProjectPath;
+		NSString* gitDirectory = newProjectPath ?: self.terminalStartDirectory;
+		self.sourceControlController.directory = gitDirectory;
+		self.gitWorkspaceController.directory = gitDirectory;
 		if(_projectSCMInfo = scm::info(to_s(_projectPath)))
 		{
 			__weak DocumentWindowController* weakSelf = self;
@@ -2469,13 +2517,14 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 	else
 	{
-		self.projectPath = self.defaultProjectPath ?: (self.fileBrowserVisible ? self.fileBrowser.path : nil);
+		self.projectPath = self.defaultProjectPath ?: (self.fileBrowserVisible ? self.fileBrowser.path : self.sourceControlVisible ? self.projectPath : nil);
 		self.documentView.document = nil;
 		self.documentView.hidden = YES;
 		self.outlineViewController.document = nil;
 		if(self.window.firstResponder == self.textView)
 			[self.window makeFirstResponder:self.fileBrowserVisible ? self.fileBrowser.outlineView : nil];
 	}
+	[self updateGitSoftWrap];
 	[self navigationHistoryDidChange:nil];
 }
 
@@ -2825,7 +2874,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self cancelSidebarCollapse];
 	if(_fileBrowserVisible != makeVisibleFlag)
 	{
-		BOOL updateWindow = !self.outlineVisible && !self.disableFileBrowserWindowResize;
+		BOOL updateWindow = !self.outlineVisible && !self.sourceControlVisible && !self.disableFileBrowserWindowResize;
 		NSRect target = updateWindow && makeVisibleFlag ? [self frameForOpeningSidebar] : NSZeroRect;
 		_fileBrowserVisible = makeVisibleFlag;
 		if(makeVisibleFlag)
@@ -2836,7 +2885,6 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			self.fileBrowser.delegate = self;
 			[self.fileBrowser setupViewWithState:_fileBrowserHistory];
 			[self updateChromeTheme];
-			self.layoutView.fileBrowserActionsView = self.fileBrowser.actionsView;
 			if(!_fileBrowserHistory)
 			{
 				if(NSString* path = self.projectPath ?: self.defaultProjectPath)
@@ -2849,7 +2897,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		if(!makeVisibleFlag && [[self.window firstResponder] isKindOfClass:[NSView class]] && [(NSView*)[self.window firstResponder] isDescendantOf:self.layoutView.fileBrowserView])
 			[self makeTextViewFirstResponder:self];
 
-		self.layoutView.fileBrowserView = makeVisibleFlag ? self.fileBrowser.view : nil;
+		self.layoutView.fileBrowserActionsView = makeVisibleFlag ? self.fileBrowser.actionsView : nil;
+		self.layoutView.fileBrowserView = makeVisibleFlag ? (FileBrowserView*)self.fileBrowser.view : nil;
 
 		if(makeVisibleFlag && self.autoRevealFile)
 			[self revealSelectedFileInBrowser];
@@ -2860,13 +2909,82 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[[self class] scheduleSessionBackup:self];
 }
 
+- (void)updateSidebarPanelVisibility
+{
+	BOOL editing = self.workspaceMode == WorkspaceModeEditor;
+	self.sourceControlController.panelVisible = editing && self.sourceControlVisible && !self.layoutView.sourceControlCollapsed;
+	self.outlineViewController.panelVisible = editing && self.outlineVisible && !self.layoutView.outlineCollapsed;
+}
+
+- (void)setSourceControlVisible:(BOOL)visible
+{
+	if(_sourceControlVisible == visible) return;
+	[self cancelSidebarCollapse];
+	BOOL updateWindow = !self.fileBrowserVisible && !self.outlineVisible && !self.disableFileBrowserWindowResize;
+	NSRect target = updateWindow && visible ? [self frameForOpeningSidebar] : NSZeroRect;
+	_sourceControlVisible = visible;
+	if(visible)
+	{
+		self.sidebarSectionsToRestore = 0;
+		if(!self.sourceControlController)
+		{
+			self.sourceControlController = [[SourceControlViewController alloc] init];
+			__weak DocumentWindowController* weakSelf = self;
+			self.sourceControlController.bufferProvider = ^NSDictionary*{ return [weakSelf captureProjectChangesBuffers]; };
+			self.sourceControlController.showDiff = ^(NSDictionary* change, NSDictionary* snapshot, NSDictionary* buffers){
+				DocumentWindowController* controller = weakSelf;
+				if(!controller.gitChangeController) {
+					controller.gitChangeController = [[GitChangeWindowController alloc] init];
+					controller.gitChangeController.softWrapChanged = ^(BOOL enabled){ [weakSelf applySoftWrap:enabled]; };
+				}
+				[controller updateGitSoftWrap];
+				[controller.gitChangeController showChange:change snapshot:snapshot buffers:buffers];
+			};
+			self.sourceControlController.repositoryDidChange = ^{ [weakSelf.gitWorkspaceController refresh:nil]; };
+			self.sourceControlController.themeBackgroundColor = self.layoutView.sidebarThemeBackgroundColor;
+		}
+		self.sourceControlController.directory = self.projectPath ?: self.terminalStartDirectory;
+	}
+	else if([self.window.firstResponder isKindOfClass:NSView.class] && [(NSView*)self.window.firstResponder isDescendantOf:self.sourceControlController.view])
+		[self makeTextViewFirstResponder:self];
+	self.layoutView.sourceControlView = visible ? self.sourceControlController.view : nil;
+	[self updateSidebarPanelVisibility];
+	if(updateWindow) [self updateWindowForSidebarVisibility:visible openingFrame:target];
+	[self updateSidebarButton];
+	[[self class] scheduleSessionBackup:self];
+}
+
+- (IBAction)toggleSourceControl:(id)sender
+{
+	if(self.workspaceMode == WorkspaceModeGit)
+	{
+		self.workspaceMode = WorkspaceModeEditor;
+		if(self.sourceControlVisible && !self.layoutView.sourceControlCollapsed)
+		{
+			[self.sourceControlController focusChanges];
+			return;
+		}
+	}
+	if(self.sourceControlVisible && !self.layoutView.sourceControlCollapsed)
+	{
+		if(!self.fileBrowserVisible && !self.outlineVisible) [self toggleSidebar:sender];
+		else self.sourceControlVisible = NO;
+	}
+	else
+	{
+		self.sourceControlVisible = YES;
+		self.layoutView.sourceControlCollapsed = NO;
+		[self.sourceControlController focusChanges];
+	}
+}
+
 - (void)setOutlineVisible:(BOOL)makeVisibleFlag
 {
 	if(makeVisibleFlag || _outlineVisible)
 		[self cancelSidebarCollapse];
 	if(_outlineVisible != makeVisibleFlag)
 	{
-		BOOL updateWindow = !self.fileBrowserVisible && !self.disableFileBrowserWindowResize;
+		BOOL updateWindow = !self.fileBrowserVisible && !self.sourceControlVisible && !self.disableFileBrowserWindowResize;
 		NSRect target = updateWindow && makeVisibleFlag ? [self frameForOpeningSidebar] : NSZeroRect;
 		_outlineVisible = makeVisibleFlag;
 		if(makeVisibleFlag)
@@ -2876,7 +2994,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			[self makeTextViewFirstResponder:self];
 
 		self.layoutView.outlineView = makeVisibleFlag ? self.outlineViewController.view : nil;
-		self.outlineViewController.panelVisible = makeVisibleFlag && !self.layoutView.outlineCollapsed;
+		[self updateSidebarPanelVisibility];
 
 		if(updateWindow)
 			[self updateWindowForSidebarVisibility:makeVisibleFlag openingFrame:target];
@@ -2887,7 +3005,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)toggleOutline:(id)sender
 {
-	if(self.outlineVisible && !self.fileBrowserVisible)
+	if(self.outlineVisible && !self.fileBrowserVisible && !self.sourceControlVisible)
 		[self toggleSidebar:sender];
 	else
 		self.outlineVisible = !self.outlineVisible;
@@ -2895,7 +3013,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (SidebarSections)visibleSidebarSections
 {
-	return (self.fileBrowserVisible ? SidebarSectionProject : 0) | (self.outlineVisible ? SidebarSectionOutline : 0);
+	return (self.fileBrowserVisible ? SidebarSectionProject : 0) | (self.outlineVisible ? SidebarSectionOutline : 0) | (self.sourceControlVisible ? SidebarSectionSourceControl : 0);
 }
 
 - (void)updateSidebarButton
@@ -2924,6 +3042,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	NSRect target = [self frameForOpeningSidebar];
 	self.disableFileBrowserWindowResize = YES;
 	self.fileBrowserVisible = (sections & SidebarSectionProject) != 0;
+	self.sourceControlVisible = (sections & SidebarSectionSourceControl) != 0;
 	self.outlineVisible = (sections & SidebarSectionOutline) != 0;
 	self.disableFileBrowserWindowResize = disableResize;
 	[self updateWindowForSidebarVisibility:YES openingFrame:target];
@@ -3020,6 +3139,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	BOOL disableResize = self.disableFileBrowserWindowResize;
 	self.disableFileBrowserWindowResize = YES;
 	self.fileBrowserVisible = NO;
+	self.sourceControlVisible = NO;
 	self.outlineVisible = NO;
 	self.disableFileBrowserWindowResize = disableResize;
 	[self updateWindowForSidebarVisibility:NO openingFrame:NSZeroRect];
@@ -3077,6 +3197,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)updateChromeTheme
 {
+	self.gitWorkspaceController.syntaxThemeUUID = self.textView.themeUUID;
 	if(theme_ptr theme = self.textView.theme)
 	{
 		NSColor* sidebarBackground = [NSColor colorWithCGColor:theme->gutter_styles().background];
@@ -3084,6 +3205,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.layoutView.sidebarThemeIsDark = theme->is_dark();
 		[self.outlineViewController setThemeBackgroundColor:sidebarBackground];
 		self.fileBrowser.outlineView.backgroundColor = sidebarBackground;
+		self.sourceControlController.themeBackgroundColor = sidebarBackground;
 
 		// The content bleeds under the transparent title bar, so use the
 		// document background there while keeping the sidebar slightly distinct.
@@ -3133,6 +3255,15 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)toggleTerminalPanel:(id)sender
 {
+	if(self.workspaceMode == WorkspaceModeGit)
+	{
+		self.workspaceMode = WorkspaceModeEditor;
+		if(self.terminalPanelController.panelVisible)
+		{
+			[self.terminalPanelController focusTerminal];
+			return;
+		}
+	}
 	NSResponder* responder = self.window.firstResponder;
 	if(self.terminalPanelController.panelVisible && [responder isKindOfClass:NSView.class] &&
 	   [(NSView*)responder isDescendantOf:self.terminalPanelController.view] &&
@@ -3148,16 +3279,125 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[[self class] scheduleSessionBackup:self];
 }
 
+- (NSDictionary<NSString*, ProjectChangesBuffer*>*)captureProjectChangesBuffers
+{
+	NSMutableDictionary* buffers = [NSMutableDictionary dictionary];
+	for(OakDocument* document in self.documents)
+		if(document.path && document.isLoaded && document.isDocumentEdited)
+			buffers[document.path.stringByStandardizingPath] = [ProjectChangesBuffer captureDocument:document];
+	return buffers;
+}
+
+- (IBAction)showGitWorkspace:(id)sender
+{
+	self.workspaceMode = self.workspaceMode == WorkspaceModeEditor ? WorkspaceModeGit : WorkspaceModeEditor;
+}
+
+- (BOOL)editorSoftWrap
+{
+	if(self.selectedDocument) return self.textView.softWrap;
+	return settings_for_path(NULL_STR, "", to_s(self.projectPath ?: self.terminalStartDirectory)).get(kSettingsSoftWrapKey, false);
+}
+
+- (void)updateGitSoftWrap
+{
+	if(!self.gitWorkspaceController && !self.gitChangeController) return;
+	BOOL enabled = [self editorSoftWrap];
+	self.gitWorkspaceController.softWrap = enabled;
+	self.gitChangeController.softWrap = enabled;
+}
+
+- (void)applySoftWrap:(BOOL)enabled
+{
+	if(self.selectedDocument) self.textView.softWrap = enabled;
+	else settings_t::set(kSettingsSoftWrapKey, (bool)enabled);
+	self.gitWorkspaceController.softWrap = enabled;
+	self.gitChangeController.softWrap = enabled;
+}
+
+- (IBAction)toggleSoftWrap:(id)sender
+{
+	BOOL enabled = self.workspaceMode == WorkspaceModeGit ? self.gitWorkspaceController.softWrap : [self editorSoftWrap];
+	[self applySoftWrap:!enabled];
+}
+
+- (IBAction)changeWorkspaceMode:(NSSegmentedControl*)sender
+{
+	self.workspaceMode = sender.selectedSegment == WorkspaceModeGit ? WorkspaceModeGit : WorkspaceModeEditor;
+}
+
+- (void)setWorkspaceMode:(WorkspaceMode)mode
+{
+	self.workspaceModeControl.selectedSegment = _workspaceMode;
+	if(_workspaceMode == mode) return;
+	NSView* editor = self.terminalPanelController.view;
+	NSResponder* first = self.window.firstResponder;
+	if(mode == WorkspaceModeGit)
+		self.editorModeResponder = [first isKindOfClass:NSView.class] && [(NSView*)first isDescendantOf:editor] ? (NSView*)first : nil;
+	if(![self.window makeFirstResponder:nil]) return;
+
+	// AppKit may send the control's action in an animation context. Update the
+	// title bar geometry before laying out and focusing the new workspace.
+	[NSAnimationContext runAnimationGroup:^(NSAnimationContext* context){
+		context.allowsImplicitAnimation = NO;
+		[self applyWorkspaceMode:mode];
+	} completionHandler:nil];
+}
+
+- (void)applyWorkspaceMode:(WorkspaceMode)mode
+{
+	NSView* editor = self.terminalPanelController.view;
+	_workspaceMode = mode;
+	self.workspaceModeControl.selectedSegment = mode;
+	[self updateSidebarPanelVisibility];
+	if(mode == WorkspaceModeEditor)
+	{
+		self.gitWorkspaceController.active = NO;
+		self.gitWorkspaceController.view.hidden = YES;
+		self.tabBarView.alternateTitleBarItems = nil;
+		editor.hidden = NO;
+		[self updateTabBarVisibility];
+		NSView* previous = self.editorModeResponder;
+		self.editorModeResponder = nil;
+		if(previous && [previous isDescendantOf:editor] && !previous.isHiddenOrHasHiddenAncestor && [self.window makeFirstResponder:previous]) return;
+		[self.window makeFirstResponder:self.selectedDocument ? self.textView : self.workspaceModeControl];
+		return;
+	}
+
+	if(!self.gitWorkspaceController) {
+		self.gitWorkspaceController = [[GitWorkspaceViewController alloc] init];
+		self.gitWorkspaceController.syntaxThemeUUID = self.textView.themeUUID;
+		__weak DocumentWindowController* weakSelf = self;
+		self.gitWorkspaceController.bufferProvider = ^NSDictionary*{ return [weakSelf captureProjectChangesBuffers]; };
+		self.gitWorkspaceController.repositoryDidChange = ^{ [weakSelf.sourceControlController refresh:nil]; };
+		NSView* workspace = self.gitWorkspaceController.view;
+		NSView* content = self.window.contentView;
+		workspace.translatesAutoresizingMaskIntoConstraints = NO;
+		[content addSubview:workspace positioned:NSWindowBelow relativeTo:self.tabBarView];
+		[NSLayoutConstraint activateConstraints:@[
+			[workspace.topAnchor constraintEqualToAnchor:self.tabBarView.bottomAnchor],
+			[workspace.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+			[workspace.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+			[workspace.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+		]];
+	}
+	self.gitWorkspaceController.directory = self.projectPath ?: self.terminalStartDirectory;
+	[self updateGitSoftWrap];
+	editor.hidden = YES;
+	self.gitWorkspaceController.view.hidden = NO;
+	self.tabBarView.alternateTitleBarItems = self.gitWorkspaceController.titleBarItems;
+	[self updateTabBarVisibility];
+	self.gitWorkspaceController.active = YES;
+	[self.window.contentView layoutSubtreeIfNeeded];
+	[self.gitWorkspaceController focusWorkspace];
+}
+
 - (IBAction)showProjectChanges:(id)sender
 {
 	if(!self.projectChangesController) {
 		__weak DocumentWindowController* weakSelf = self;
 		self.projectChangesController = [[ProjectChangesWindowController alloc] initWithDirectory:self.projectPath ?: self.terminalStartDirectory buffers:^NSDictionary*{
-			NSMutableDictionary* buffers = [NSMutableDictionary dictionary];
-			for(OakDocument* document in weakSelf.documents)
-				if(document.path && document.isLoaded && document.isDocumentEdited)
-					buffers[document.path.stringByStandardizingPath] = [ProjectChangesBuffer captureDocument:document];
-			return buffers;
+			return [weakSelf captureProjectChangesBuffers];
 		} openFile:^(NSString* path, NSUInteger line){
 			[weakSelf openItems:@[@{ @"path": path, @"selectionString": [NSString stringWithFormat:@"%lu:1", (unsigned long)line] }] closingOtherTabs:NO activate:YES];
 		}];
@@ -3175,7 +3415,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)toggleFileBrowser:(id)sender
 {
-	if(self.fileBrowserVisible && !self.outlineVisible)
+	if(self.fileBrowserVisible && !self.outlineVisible && !self.sourceControlVisible)
 		[self toggleSidebar:sender];
 	else
 		self.fileBrowserVisible = !self.fileBrowserVisible;
@@ -3201,6 +3441,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	{
 		self.fileBrowserVisible = YES;
 		self.layoutView.fileBrowserCollapsed = NO;
+		self.layoutView.fileBrowserView.folderCollapsed = NO;
 		[self revealSelectedFileInBrowser];
 	}
 }
@@ -3447,7 +3688,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (BOOL)treatAsProjectWindow
 {
-	return self.projectPath && (self.fileBrowserVisible || _documents.count > 1);
+	return self.projectPath && (self.fileBrowserVisible || self.sourceControlVisible || _documents.count > 1);
 }
 
 - (NSPoint)positionForWindowUnderCaret
@@ -3607,6 +3848,17 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[menuItem setTitle:self.fileBrowserVisible ? @"Hide File Browser" : @"Show File Browser"];
 	else if([menuItem action] == @selector(toggleOutline:))
 		[menuItem setTitle:self.outlineVisible ? @"Hide Outline" : @"Show Outline"];
+	else if([menuItem action] == @selector(toggleSourceControl:))
+		[menuItem setTitle:self.sourceControlVisible && !self.layoutView.sourceControlCollapsed ? @"Hide Source Control Sidebar" : @"Show Source Control Sidebar"];
+	else if([menuItem action] == @selector(showGitWorkspace:))
+		[menuItem setTitle:self.workspaceMode == WorkspaceModeGit ? @"Switch to Editor Mode" : @"Switch to Git Mode"];
+	else if([menuItem action] == @selector(toggleSoftWrap:))
+	{
+		BOOL inGit = self.workspaceMode == WorkspaceModeGit;
+		BOOL enabled = inGit ? self.gitWorkspaceController.softWrap : [self editorSoftWrap];
+		[menuItem setTitle:enabled ? @"Disable Soft Wrap" : @"Enable Soft Wrap"];
+		active = inGit || self.selectedDocument != nil;
+	}
 	else if([menuItem action] == @selector(toggleHTMLOutput:))
 	{
 		BOOL isVisibleAndKey = self.htmlOutputVisible && (!self.htmlOutputInWindow || self.htmlOutputWindowController.window.isKeyWindow);
@@ -3864,6 +4116,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 - (void)setupControllerForProject:(NSDictionary*)project skipMissingFiles:(BOOL)skipMissing
 {
+	self.sourceControlVisible = NO;
 	if(self.fileBrowser)
 	{
 		self.fileBrowserVisible = NO;
@@ -3888,14 +4141,16 @@ static NSUInteger DisableSessionSavingCount = 0;
 	self.projectPath        = project[@"projectPath"];
 	self.fileBrowserHistory = project[@"archivedFileBrowserState"] ?: project[@"fileBrowserState"];
 	self.layoutView.fileBrowserCollapsed = [project[@"fileBrowserCollapsed"] boolValue];
+	self.layoutView.sourceControlCollapsed = [project[@"sourceControlCollapsed"] boolValue];
 	self.layoutView.outlineCollapsed = [project[@"outlineCollapsed"] boolValue];
 	self.layoutView.outlineHeight = [project[@"outlineHeight"] doubleValue];
 	self.fileBrowserVisible = [project[@"fileBrowserVisible"] boolValue];
 	if(self.fileBrowserVisible && !self.fileBrowser.URL && self.projectPath)
 		[self.fileBrowser goToURL:[NSURL fileURLWithPath:self.projectPath]];
+	self.sourceControlVisible = [project[@"sourceControlVisible"] boolValue];
 	self.outlineVisible     = [project[@"outlineVisible"] boolValue];
-	if(!self.fileBrowserVisible && !self.outlineVisible)
-		self.sidebarSectionsToRestore = [project[@"sidebarSectionsToRestore"] unsignedIntegerValue] & (SidebarSectionProject | SidebarSectionOutline);
+	if(!self.visibleSidebarSections)
+		self.sidebarSectionsToRestore = [project[@"sidebarSectionsToRestore"] unsignedIntegerValue] & (SidebarSectionProject | SidebarSectionOutline | SidebarSectionSourceControl);
 
 	NSMutableArray<OakDocument*>* documents = [NSMutableArray array];
 	NSInteger selectedTabIndex = 0;
@@ -3964,6 +4219,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 			project = @{
 				@"fileBrowserVisible": @YES,
 				@"fileBrowserCollapsed": @(self.layoutView.fileBrowserCollapsed),
+				@"sourceControlVisible": @(self.sourceControlVisible),
+				@"sourceControlCollapsed": @(self.layoutView.sourceControlCollapsed),
 				@"outlineVisible": @(self.outlineVisible),
 				@"outlineCollapsed": @(self.layoutView.outlineCollapsed),
 				@"outlineHeight": @(self.layoutView.outlineHeight),
@@ -4021,8 +4278,10 @@ static NSUInteger DisableSessionSavingCount = 0;
 	res[@"terminalPanelHeight"] = @(self.terminalPanelController.panelHeight);
 	res[@"htmlOutputSize"]     = NSStringFromSize(self.htmlOutputSize);
 	res[@"fileBrowserVisible"] = @(self.fileBrowserVisible);
+	res[@"sourceControlVisible"] = @(self.sourceControlVisible);
 	res[@"fileBrowserWidth"]   = @(self.fileBrowserWidth);
 	res[@"fileBrowserCollapsed"] = @(self.layoutView.fileBrowserCollapsed);
+	res[@"sourceControlCollapsed"] = @(self.layoutView.sourceControlCollapsed);
 	res[@"outlineVisible"]     = @(self.outlineVisible);
 	res[@"outlineCollapsed"]   = @(self.layoutView.outlineCollapsed);
 	res[@"outlineHeight"]      = @(self.layoutView.outlineHeight);

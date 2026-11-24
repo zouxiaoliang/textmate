@@ -3,6 +3,9 @@
 #import "../src/DocumentWindowController.h"
 #import "../src/OutlineViewController.h"
 #import "../src/ProjectLayoutView.h"
+#import <FileBrowser/FileBrowserView.h>
+#import <FileBrowser/FileBrowserViewController.h>
+#import <FileBrowser/OFB/OFBHeaderView.h>
 #import <OakTextView/OakDocumentView.h>
 #import <OakTextView/OakTextView.h>
 
@@ -122,6 +125,12 @@ void test_outline_scroll_view_fills_panel ()
 			NSTableCellView* methodRow = [tree viewAtColumn:0 row:2 makeIfNecessary:YES];
 			OAK_ASSERT(moduleRow.imageView.image && typeRow.imageView.image && methodRow.imageView.image);
 			OAK_ASSERT(NSMinX(moduleRow.frame) < NSMinX(typeRow.frame) && NSMinX(typeRow.frame) < NSMinX(methodRow.frame));
+			CGFloat rootChevron = NSMidX([tree frameOfOutlineCellAtRow:0]);
+			CGFloat childChevron = NSMidX([tree frameOfOutlineCellAtRow:1]);
+			OAK_ASSERT(rootChevron == kOakSidebarDisclosureCenter + kOakSidebarIndentation);
+			OAK_ASSERT(childChevron - rootChevron == kOakSidebarIndentation);
+			OAK_ASSERT(NSMinX(moduleRow.frame) >= rootChevron + kOakSidebarIndentation / 2);
+			OAK_ASSERT(NSMinX(typeRow.frame) - NSMinX(moduleRow.frame) == kOakSidebarIndentation);
 			[tree collapseItem:type];
 			OAK_ASSERT(tree.numberOfRows == 4 && [tree parentForItem:[tree itemAtRow:2]] == module);
 			[window close];
@@ -146,7 +155,7 @@ void test_project_and_outline_share_a_collapsible_sidebar ()
 			controller.outlineVisible = YES;
 			[controller.window.contentView layoutSubtreeIfNeeded];
 
-			NSView* project = layout.fileBrowserView;
+			FileBrowserView* project = layout.fileBrowserView;
 			NSView* outline = layout.outlineView;
 			NSView* sidebar = project.superview;
 			OAK_ASSERT(sidebar && sidebar == outline.superview);
@@ -167,6 +176,16 @@ void test_project_and_outline_share_a_collapsible_sidebar ()
 				}
 			}
 			OAK_ASSERT(projectHeader && outlineHeader);
+			OFBHeaderView* navigation = project.headerView;
+			OakSidebarTreeView* fileTree = (OakSidebarTreeView*)project.outlineView;
+			NSRect folderAlignment = [navigation.folderPopUpButton alignmentRectForFrame:navigation.folderPopUpButton.frame];
+			CGFloat folderLeading = NSMinX(folderAlignment);
+			OAK_ASSERT(std::abs(folderLeading - (kOakSidebarDisclosureCenter + kOakSidebarIndentation - 3)) <= 0.5);
+			OAK_ASSERT(folderLeading < kOakSidebarDisclosureCenter + fileTree.rootIndentation);
+			NSButton* folderDisclosure = navigation.folderDisclosureButton;
+			NSRect disclosureAlignment = [folderDisclosure alignmentRectForFrame:folderDisclosure.frame];
+			OAK_ASSERT(std::abs(NSMidX(disclosureAlignment) - kOakSidebarDisclosureCenter) <= 0.5);
+			OAK_ASSERT(std::abs(NSMaxX(disclosureAlignment) - folderLeading) <= 0.5);
 			NSView* actions = layout.fileBrowserActionsView;
 			OAK_ASSERT(actions.superview == sidebar && actions.subviews.count == 6);
 			for(NSView* button in actions.subviews)
@@ -185,6 +204,9 @@ void test_project_and_outline_share_a_collapsible_sidebar ()
 			}
 			OAK_ASSERT(visibleButtons < actions.subviews.count && actionsMenu && !actionsMenu.hidden);
 			OAK_ASSERT(NSContainsRect(actions.bounds, actionsMenu.frame));
+			OAK_ASSERT(NSContainsRect(navigation.bounds, folderDisclosure.frame));
+			OAK_ASSERT(NSContainsRect(navigation.bounds, navigation.folderPopUpButton.frame));
+			OAK_ASSERT(NSContainsRect(navigation.bounds, navigation.goForwardButton.frame));
 			[actionsMenu.menu.delegate menuNeedsUpdate:actionsMenu.menu];
 			for(SEL action : { @selector(newDocumentInDirectory:), @selector(reload:), @selector(orderFrontFindPanelForFileBrowser:), @selector(goToFavorites:), @selector(goToSCMDataSource:) })
 				OAK_ASSERT([actionsMenu.menu indexOfItemWithTarget:nil andAction:action] != -1 || [actionsMenu.menu indexOfItemWithTarget:actionsMenu.menu.delegate andAction:action] != -1);
@@ -213,6 +235,29 @@ void test_project_and_outline_share_a_collapsible_sidebar ()
 			CGFloat resizedOutlineHeight = NSHeight(outline.frame);
 			OAK_ASSERT(!layout.outlineCollapsed && resizedOutlineHeight == beforeDrag + 30 && resizedOutlineHeight == layout.outlineHeight);
 			OAK_ASSERT(NSEqualRects(windowFrame, controller.window.frame));
+
+			NSScrollView* files = fileTree.enclosingScrollView;
+			NSRect folderMenuFrame = navigation.folderPopUpButton.frame;
+			NSRect backButtonFrame = navigation.goBackButton.frame;
+			NSRect forwardButtonFrame = navigation.goForwardButton.frame;
+			OAK_ASSERT(!project.folderCollapsed && folderDisclosure.isAccessibilityExpanded && !files.hidden);
+			[folderDisclosure performClick:nil];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			OAK_ASSERT(project.folderCollapsed && !folderDisclosure.isAccessibilityExpanded && files.hidden);
+			OAK_ASSERT(!layout.fileBrowserCollapsed && actions.superview == sidebar);
+			OAK_ASSERT(NSHeight(files.frame) == 0 && NSHeight(project.frame) == NSHeight(navigation.frame));
+			OAK_ASSERT(NSMaxY(outlineHeader.frame) == NSMinY(project.frame) && NSHeight(outline.frame) > resizedOutlineHeight);
+			OAK_ASSERT(outlineHeader.accessibilityCustomActions.count == 0 && layout.outlineHeight == resizedOutlineHeight);
+			OAK_ASSERT(NSEqualRects(folderMenuFrame, navigation.folderPopUpButton.frame) && NSEqualRects(backButtonFrame, navigation.goBackButton.frame) && NSEqualRects(forwardButtonFrame, navigation.goForwardButton.frame));
+			[projectHeader performClick:nil];
+			OAK_ASSERT(layout.fileBrowserCollapsed && project.folderCollapsed && !project.superview);
+			[projectHeader performClick:nil];
+			OAK_ASSERT(!layout.fileBrowserCollapsed && project.folderCollapsed && project.superview == sidebar);
+			[folderDisclosure performClick:nil];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			OAK_ASSERT(!project.folderCollapsed && folderDisclosure.isAccessibilityExpanded && !files.hidden);
+			OAK_ASSERT(NSHeight(outline.frame) == resizedOutlineHeight && outlineHeader.accessibilityCustomActions.count == 2);
+
 			NSPoint click = [outlineHeader convertPoint:NSMakePoint(NSMidX(outlineHeader.bounds), NSMidY(outlineHeader.bounds)) toView:nil];
 			click.y += NSHeight(outlineHeader.bounds) / 2 - 2;
 			OAK_ASSERT([layout hitTest:[layout.superview convertPoint:click fromView:nil]] == outlineHeader);
@@ -240,6 +285,18 @@ void test_project_and_outline_share_a_collapsible_sidebar ()
 			OAK_ASSERT(outline.superview == sidebar && NSMinX(sidebar.frame) > NSMaxX(layout.documentView.frame));
 			OAK_ASSERT(NSHeight(outline.frame) == resizedOutlineHeight);
 			OAK_ASSERT(NSEqualRects(windowFrame, controller.window.frame));
+
+			controller.outlineVisible = NO;
+			[folderDisclosure performClick:nil];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			OAK_ASSERT(project.folderCollapsed && NSHeight(project.frame) == NSHeight(navigation.frame));
+			FileBrowserViewController* browser = [controller valueForKey:@"fileBrowser"];
+			NSURL* location = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+			OAK_ASSERT([NSFileManager.defaultManager createDirectoryAtURL:location withIntermediateDirectories:NO attributes:nil error:nil]);
+			[browser goToURL:location];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			OAK_ASSERT([browser.URL isEqual:location] && !project.folderCollapsed && !files.hidden && NSHeight(files.frame) > 0);
+			[NSFileManager.defaultManager removeItemAtURL:location error:nil];
 
 			[controller close];
 			[DocumentWindowController enableSessionSave];

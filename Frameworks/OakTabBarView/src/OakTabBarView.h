@@ -23,7 +23,12 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 // controls and tabs begin to their right; the inset strip stays part of the
 // bar and participates in window dragging.
 @property (nonatomic) CGFloat leadingContentInset;
+@property (nonatomic) NSControl* leadingControl;
 @property (nonatomic, copy) NSArray<NSButton*>* leadingButtons;
+@property (nonatomic) BOOL showsOnlyLeadingControl;
+// Shown alongside the leading control in place of file tabs and their status.
+@property (nonatomic) NSView* alternateTitleBarItems;
+@property (nonatomic, copy) void (^layoutAlternateTitleBarItems)(CGFloat leadingControlsEnd);
 
 // A short status message shown in the bar's trailing edge, e.g. the terminal's
 // unseen state; nil (or empty) hides it again.

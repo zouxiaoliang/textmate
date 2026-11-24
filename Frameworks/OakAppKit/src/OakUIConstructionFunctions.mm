@@ -117,6 +117,7 @@ OakRolloverButton* OakCreateCloseButton (NSString* accessibilityLabel)
 @end
 
 CGFloat const kOakSidebarDisclosureCenter = 15;
+CGFloat const kOakSidebarIndentation = 12;
 
 NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat trailingPadding)
 {
@@ -150,8 +151,21 @@ NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat traili
 - (instancetype)initWithFrame:(NSRect)frame
 {
 	if(self = [super initWithFrame:frame])
-		self.indentationPerLevel = 12;
+		self.indentationPerLevel = kOakSidebarIndentation;
 	return self;
+}
+
+- (NSRect)frameOfCellAtColumn:(NSInteger)column row:(NSInteger)row
+{
+	NSRect frame = [super frameOfCellAtColumn:column row:row];
+	if(self.rootIndentation > 0 && !NSIsEmptyRect(frame) && column >= 0 && column < self.numberOfColumns && self.outlineTableColumn == self.tableColumns[column])
+	{
+		CGFloat inset = MIN(self.rootIndentation, NSWidth(frame));
+		if(self.userInterfaceLayoutDirection != NSUserInterfaceLayoutDirectionRightToLeft)
+			frame.origin.x += inset;
+		frame.size.width -= inset;
+	}
+	return frame;
 }
 
 - (NSRect)frameOfOutlineCellAtRow:(NSInteger)row
@@ -159,7 +173,7 @@ NSImage* OakSidebarDisclosureImage (BOOL expanded, CGFloat width, CGFloat traili
 	NSRect frame = [super frameOfOutlineCellAtRow:row];
 	if(!NSIsEmptyRect(frame))
 	{
-		CGFloat inset = kOakSidebarDisclosureCenter + [self levelForRow:row] * self.indentationPerLevel;
+		CGFloat inset = kOakSidebarDisclosureCenter + self.rootIndentation + [self levelForRow:row] * self.indentationPerLevel;
 		CGFloat center = self.userInterfaceLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft ? NSMaxX(self.bounds) - inset : NSMinX(self.bounds) + inset;
 		frame.origin.x = center - NSWidth(frame) / 2;
 	}

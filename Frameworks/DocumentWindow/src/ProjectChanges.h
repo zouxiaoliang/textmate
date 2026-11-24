@@ -9,5 +9,8 @@
 
 // Worker-thread, read-only repository queries. Paths are passed as Git arguments,
 // never shell commands. The baseline is the immutable commit in the snapshot.
-NSDictionary* ProjectChangesSnapshot(NSString* directory, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers);
-NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers);
+NSDictionary* ProjectChangesSnapshot(NSString* directory, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, BOOL groupUntrackedDirectories = NO);
+NSString* ProjectChangesBufferAbsolutePath(NSString* path);
+NSDictionary* ProjectChangesDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, NSUInteger contextLines = 3, BOOL ignoreWhitespace = NO);
+NSDictionary* ProjectChangesIndexToBufferDiff(NSDictionary* snapshot, NSDictionary* file, NSDictionary<NSString*, ProjectChangesBuffer*>* buffers, NSUInteger contextLines = 3, BOOL ignoreWhitespace = NO);
+NSDictionary* ProjectChangesRevision(NSString* directory);

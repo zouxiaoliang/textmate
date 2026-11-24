@@ -1973,7 +1973,11 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 - (void)setURL:(NSURL*)url
 {
 	if(FileItem* item = [FileItem fileItemWithURL:url])
+	{
+		if(![self.URL isEqual:item.URL])
+			self.fileBrowserView.folderCollapsed = NO;
 		self.fileItem = item;
+	}
 }
 
 - (void)reload:(id)sender
