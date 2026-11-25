@@ -242,6 +242,7 @@ NSString* HeadBadge(NSString* tracking)
 @end
 
 @interface GitWorkspaceTitleBar : NSView
+@property (nonatomic) GitEditorTheme* editorTheme;
 @property (nonatomic) CGFloat navigationWidth;
 @property (nonatomic) CGFloat leadingControlsEnd;
 @property (nonatomic) NSView* repositoryItems;
@@ -271,9 +272,9 @@ NSString* HeadBadge(NSString* tracking)
 	CGFloat boundary = MIN(NSWidth(self.bounds), self.navigationWidth);
 	NSRect nav = NSMakeRect(0, 0, boundary, NSHeight(self.bounds));
 	NSRect tools = NSMakeRect(boundary, 0, NSWidth(self.bounds)-boundary, NSHeight(self.bounds));
-	[SidebarColor() setFill];
+	[(self.editorTheme.gutterBackground ?: SidebarColor()) setFill];
 	NSRectFill(NSIntersectionRect(nav, dirtyRect));
-	[WorkspaceColor(NSColor.controlBackgroundColor, 0.225, 0.230, 0.231) setFill];
+	[(self.editorTheme.background ?: WorkspaceColor(NSColor.controlBackgroundColor, 0.225, 0.230, 0.231)) setFill];
 	NSRectFill(NSIntersectionRect(tools, dirtyRect));
 	[NSColor.separatorColor setFill];
 	NSRectFillUsingOperation(NSMakeRect(boundary, 0, 1, NSHeight(self.bounds)), NSCompositingOperationSourceOver);
@@ -441,6 +442,7 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 {
 	SourceControlViewController* _workingCopy;
 	NSSplitView* _split;
+	GitWorkspaceSurface* _navigationSurface;
 	NSOutlineView* _navigation;
 	GitWorkspaceTitleBar* _workspaceTitleBar;
 	NSSearchField* _search;
@@ -555,9 +557,31 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 	[_split setHoldingPriority:NSLayoutPriorityDefaultLow forSubviewAtIndex:2];
 	FillView(_split, content);
 	[self buildWorkspacePages];
+	[self applyEditorTheme];
 	[self updateTitleBarWidth];
 	_workingCopy.directory = _directory;
 	[self rebuildNavigation];
+}
+
+- (void)setEditorTheme:(GitEditorTheme*)theme
+{
+	_editorTheme = theme;
+	if(self.isViewLoaded) [self applyEditorTheme];
+}
+
+- (void)applyEditorTheme
+{
+	GitWorkspaceSurface* content = (GitWorkspaceSurface*)self.view;
+	GitWorkspaceSurface* pages = (GitWorkspaceSurface*)_workspacePages;
+	content.fillColor = pages.fillColor = self.editorTheme.background ?: WorkspaceColor(NSColor.windowBackgroundColor, 0.145, 0.153, 0.157);
+	_navigationSurface.fillColor = self.editorTheme.gutterBackground ?: SidebarColor();
+	_workingCopy.themeBackgroundColor = content.fillColor;
+	content.appearance = _workspaceTitleBar.appearance = self.editorTheme.appearance;
+	_workspaceTitleBar.editorTheme = self.editorTheme;
+	for(NSView* surface in @[content, pages, _navigationSurface, _workspaceTitleBar])
+		[surface setNeedsDisplay:YES];
+	_diff.editorTheme = _revisionInspector.editorTheme = self.editorTheme;
+	_pullRequests.editorTheme = _branchesReview.editorTheme = self.editorTheme;
 }
 
 - (NSView*)buildTitleBarItems
@@ -746,7 +770,7 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 
 - (NSView*)buildNavigation
 {
-	GitWorkspaceSurface* sidebar = [[GitWorkspaceSurface alloc] init];
+	GitWorkspaceSurface* sidebar = _navigationSurface = [[GitWorkspaceSurface alloc] init];
 	sidebar.fillColor = SidebarColor();
 	_navigation = [[GitOutlineView alloc] initWithFrame:NSMakeRect(0, 0, 208, 633)];
 	_navigation.style = NSTableViewStyleSourceList;
@@ -1712,7 +1736,7 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 			GitRevisionView* view = [[GitRevisionView alloc] initWithFrame:NSMakeRect(0, 42, 740, 443)];
 			view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 			view.softWrap = self.softWrap;
-			view.syntaxThemeUUID = self.syntaxThemeUUID;
+			view.editorTheme = self.editorTheme;
 			[sheet.contentView addSubview:view];
 			[view showComparison:@{@"range": [NSString stringWithFormat:@"%@..%@", base, tip], @"base": base, @"tip": tip, @"summary": sheet.title} repository:root];
 			NSButton* done = [NSButton buttonWithTitle:@"Done" target:self action:@selector(closeRevisionComparison:)];
@@ -2412,7 +2436,6 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 			[self->_workingDiffTabs setEnabled:hasStaged forSegment:0];
 			[self->_workingDiffTabs setEnabled:hasUnstaged forSegment:1];
 			self->_diff.syntaxPath = file;
-			self->_diff.syntaxThemeUUID = self.syntaxThemeUUID;
 			UTType* type = directory ? UTTypeFolder : file.pathExtension.length ? [UTType typeWithFilenameExtension:file.pathExtension] : UTTypeData;
 			self->_diff.fileIcon = [NSWorkspace.sharedWorkspace iconForContentType:type ?: UTTypeData];
 			[self configureHunks:hunks];
@@ -2466,7 +2489,6 @@ static NSArray<OakCommandPaletteItem*>* QuickActionPaletteItems(NSArray<NSDictio
 	BOOL stashes = [_destination[@"mode"] isEqual:@"stashes"];
 	NSString* root = _historyRoot;
 	if(!commit || !root) { [self clearPreview:stashes ? @"No stash selected" : @"No commit selected"]; return; }
-	_revisionInspector.syntaxThemeUUID = self.syntaxThemeUUID;
 	__weak GitWorkspaceViewController* weakSelf = self;
 	[_revisionInspector showRevision:commit repository:root stash:stashes completion:^{
 		GitWorkspaceViewController* self = weakSelf;

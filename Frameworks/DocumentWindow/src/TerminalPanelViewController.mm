@@ -1,5 +1,6 @@
 #import "TerminalPanelViewController.h"
 #import "TerminalTabBarController.h"
+#import "FloatingPanel.h"
 #import <OakAppKit/OakUIConstructionFunctions.h>
 #if HAVE_OAK_SWIFTUI
 	#import "OakSwiftUI-Swift.h"
@@ -9,6 +10,7 @@ NSString* const kUserDefaultsTerminalPanelPlacementKey = @"terminalPanelPlacemen
 NSString* const kTerminalPanelPositionLeft   = @"left";
 NSString* const kTerminalPanelPositionRight  = @"right";
 NSString* const kTerminalPanelPositionBottom = @"bottom";
+NSString* const kTerminalPanelPositionFloating = @"floating";
 static NSString* const kUserDefaultsTerminalPanelWidthKey  = @"terminalPanelWidth";
 static NSString* const kUserDefaultsTerminalPanelHeightKey = @"terminalPanelHeight";
 
@@ -18,10 +20,14 @@ static CGFloat const kMinimumPanelWidth  = 120;
 static CGFloat const kMinimumPanelHeight = 100;
 static CGFloat const kMinimumContentWidth  = 240;
 static CGFloat const kMinimumContentHeight = 120;
+static CGFloat const kFloatingHeaderInset = 6;
+static CGFloat const kFloatingHeaderHeight = 24;
 
-static BOOL IsPanelPosition (NSString* position)
+static NSString* SupportedPanelPosition (NSString* position)
 {
-	return [@[ kTerminalPanelPositionLeft, kTerminalPanelPositionRight, kTerminalPanelPositionBottom ] containsObject:position];
+	if([kTerminalPanelPositionFloating isEqual:position])
+		return TEXTMATE_ENABLE_FLOATING_TERMINAL ? kTerminalPanelPositionFloating : kTerminalPanelPositionBottom;
+	return [@[ kTerminalPanelPositionLeft, kTerminalPanelPositionRight, kTerminalPanelPositionBottom ] containsObject:position] ? position : nil;
 }
 
 typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
@@ -35,10 +41,18 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 @property (nonatomic) NSView* divider; // nil while the panel is hidden
 @property (nonatomic) BOOL dividerAlongYAxis;
 @property (nonatomic, copy) void (^dividerDragHandler)(TerminalDividerDrag phase, NSSize offset);
+@property (nonatomic, copy) void (^windowChangedHandler)(void);
 @property (nonatomic) BOOL mouseDownRecursionGuard;
 @end
 
 @implementation TerminalPanelLayoutView
+- (void)viewDidMoveToWindow
+{
+	[super viewDidMoveToWindow];
+	if(self.windowChangedHandler)
+		self.windowChangedHandler();
+}
+
 - (NSRect)dividerResizeRect
 {
 	if(!_divider)
@@ -123,6 +137,11 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 @property (nonatomic) NSFont* terminalFont;
 @property (nonatomic) NSView* contentView;
 @property (nonatomic) NSView* panelView;
+@property (nonatomic) FloatingPanel* floatingPanel;
+@property (nonatomic) NSBox* floatingSurface;
+@property (nonatomic) FloatingPanelDragBar* floatingDragBar;
+@property (nonatomic) NSView* floatingTabs;
+@property (nonatomic) NSView* floatingBody;
 @property (nonatomic) NSMutableArray<NSLayoutConstraint*>* layoutConstraints;
 @property (nonatomic) NSLayoutConstraint* panelSizeConstraint;
 @property (nonatomic) CGFloat dragInitialSize;
@@ -144,7 +163,7 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 	{
 		_contentView = contentView;
 		NSString* placement = [NSUserDefaults.standardUserDefaults stringForKey:kUserDefaultsTerminalPanelPlacementKey];
-		_panelPosition = IsPanelPosition(placement) ? placement : kTerminalPanelPositionBottom;
+		_panelPosition = SupportedPanelPosition(placement) ?: kTerminalPanelPositionBottom;
 		_panelWidth    = MAX(kMinimumPanelWidth, [NSUserDefaults.standardUserDefaults doubleForKey:kUserDefaultsTerminalPanelWidthKey]);
 		_panelHeight   = MAX(kMinimumPanelHeight, [NSUserDefaults.standardUserDefaults doubleForKey:kUserDefaultsTerminalPanelHeightKey]);
 		_layoutConstraints = [NSMutableArray array];
@@ -153,6 +172,7 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 		_layoutView.dividerDragHandler = ^(TerminalDividerDrag phase, NSSize offset){
 			[weakSelf dragDivider:phase offset:offset];
 		};
+		_layoutView.windowChangedHandler = ^{ [weakSelf updateFloatingPresentation]; };
 		self.view = _layoutView;
 
 		NSBox* panel = [[NSBox alloc] initWithFrame:NSZeroRect];
@@ -190,7 +210,10 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 		_terminalController.contextSessionClosed = self.contextSessionClosed;
 		[_panelView removeFromSuperview];
 		_panelView = _terminalController.view;
-		[self rebuildLayout];
+		if([self usesFloatingPanel])
+			[self attachFloatingContent];
+		else
+			[self rebuildLayout];
 	}
 	if(_terminalFont)
 		[_terminalController applyFont:_terminalFont];
@@ -292,6 +315,7 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 #if HAVE_OAK_SWIFTUI
 	self.terminalTheme = [[OakTerminalTheme alloc] initWithBackground:background foreground:foreground caret:caret selection:selection syntaxColors:syntaxColors];
 	[_terminalController applyTheme:self.terminalTheme];
+	[self updateFloatingSurfaceBackground:background];
 #endif
 }
 
@@ -306,8 +330,15 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 - (void)focusTerminal
 {
 #if HAVE_OAK_SWIFTUI
+	if([self usesFloatingPanel])
+		[_floatingPanel focus];
 	[_terminalController focusTerminal];
 #endif
+}
+
+- (void)refreshFloatingPanelVisibility
+{
+	[_floatingPanel refreshWindowOrdering];
 }
 
 - (BOOL)terminalHasRunningWork
@@ -340,15 +371,147 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 	if(_panelVisible == visible)
 		return;
 	_panelVisible = visible;
-	[self rebuildLayout];
+	if([self usesFloatingPanel])
+		[self updateFloatingPresentation];
+	else
+		[self rebuildLayout];
 }
 
 - (void)setPanelPosition:(NSString*)position
 {
-	if(!IsPanelPosition(position) || [_panelPosition isEqualToString:position])
+	position = SupportedPanelPosition(position);
+	if(!position || [_panelPosition isEqualToString:position])
 		return;
+	NSWindow* terminalWindow = _panelView.window;
+	NSResponder* responder = terminalWindow.firstResponder;
+	BOOL restoreFocus = terminalWindow.isKeyWindow && [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:_panelView];
 	_panelPosition = [position copy];
+	if(![self usesFloatingPanel])
+	{
+		[_floatingPanel dismiss];
+#if HAVE_OAK_SWIFTUI
+		_terminalTabBarController.floatingDragBar = nil;
+		[_terminalController placeTabBarIn:nil];
+#endif
+		[_panelView removeFromSuperview];
+	}
 	[self rebuildLayout];
+	[self updateFloatingPresentation];
+	if(restoreFocus && _panelVisible)
+		[self focusTerminal];
+}
+
+- (BOOL)usesFloatingPanel
+{
+	return [_panelPosition isEqualToString:kTerminalPanelPositionFloating];
+}
+
+- (BOOL)isPanelTucked
+{
+	return [self usesFloatingPanel] && _floatingPanel.isTucked;
+}
+
+- (void)updateFloatingSurfaceBackground:(NSColor*)background
+{
+	if(!_floatingSurface)
+		return;
+	NSColor* gray = [background colorUsingColorSpace:NSColorSpace.genericGrayColorSpace];
+	_floatingSurface.appearance = gray ? [NSAppearance appearanceNamed:gray.whiteComponent < 0.5 ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua] : nil;
+	_floatingSurface.fillColor = background ?: NSColor.textBackgroundColor;
+}
+
+- (void)prepareFloatingPanel
+{
+	_floatingSurface = [NSBox new];
+	_floatingSurface.boxType = NSBoxCustom;
+	_floatingSurface.titlePosition = NSNoTitle;
+	_floatingSurface.borderWidth = 0;
+	_floatingSurface.contentViewMargins = NSZeroSize;
+	_floatingSurface.cornerRadius = 8;
+	_floatingSurface.wantsLayer = YES;
+	_floatingSurface.layer.cornerRadius = 8;
+	_floatingSurface.layer.masksToBounds = YES;
+	_floatingSurface.accessibilityLabel = @"Terminal Panel";
+#if HAVE_OAK_SWIFTUI
+	[self updateFloatingSurfaceBackground:self.terminalTheme.background];
+#else
+	[self updateFloatingSurfaceBackground:nil];
+#endif
+
+	FloatingPanelPinButton* pin = [[FloatingPanelPinButton alloc] initWithPanelName:@"Terminal"];
+	NSButton* hide = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"xmark" accessibilityDescription:@"Hide Terminal"]
+		target:self action:@selector(hideFloatingPanel:)];
+	hide.bordered = NO;
+	hide.controlSize = NSControlSizeSmall;
+	hide.toolTip = @"Hide Terminal";
+
+	FloatingPanelDragBar* bar = [FloatingPanelDragBar stackViewWithViews:@[ pin, hide ]];
+	bar.alignment = NSLayoutAttributeCenterY;
+	bar.spacing = 0;
+	_floatingDragBar = bar;
+	_floatingTabs = [NSView new];
+	_floatingBody = [NSView new];
+	NSView* container = _floatingSurface.contentView;
+	OakAddAutoLayoutViewsToSuperview(@[ _floatingTabs, bar, _floatingBody ], container);
+	[NSLayoutConstraint activateConstraints:@[
+		[pin.widthAnchor constraintEqualToConstant:26],
+		[pin.heightAnchor constraintEqualToConstant:kFloatingHeaderHeight],
+		[hide.widthAnchor constraintEqualToConstant:26],
+		[hide.heightAnchor constraintEqualToConstant:kFloatingHeaderHeight],
+		[bar.topAnchor constraintEqualToAnchor:container.topAnchor constant:kFloatingHeaderInset],
+		[bar.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-kFloatingHeaderInset],
+		[bar.heightAnchor constraintEqualToConstant:kFloatingHeaderHeight],
+		[_floatingTabs.topAnchor constraintEqualToAnchor:bar.topAnchor],
+		[_floatingTabs.bottomAnchor constraintEqualToAnchor:bar.bottomAnchor],
+		[_floatingTabs.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:kFloatingHeaderInset],
+		[_floatingTabs.trailingAnchor constraintEqualToAnchor:bar.leadingAnchor],
+		[_floatingBody.topAnchor constraintEqualToAnchor:bar.bottomAnchor],
+		[_floatingBody.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
+		[_floatingBody.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
+		[_floatingBody.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+	]];
+
+	_floatingPanel = [[FloatingPanel alloc] initWithContentView:_floatingSurface title:@"Terminal"];
+	_floatingPanel.opensNearBottom = YES;
+	_floatingPanel.keepsOpenWhileKey = YES;
+	__weak TerminalPanelViewController* weakSelf = self;
+	_floatingPanel.dismissHandler = ^{ [weakSelf hideFloatingPanel:nil]; };
+	bar.panel = pin.panel = _floatingPanel;
+}
+
+- (void)attachFloatingContent
+{
+	if(!_floatingBody || _panelView.superview == _floatingBody)
+		return;
+	_panelView.translatesAutoresizingMaskIntoConstraints = YES;
+	_panelView.frame = _floatingBody.bounds;
+	_panelView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+	[_floatingBody addSubview:_panelView];
+#if HAVE_OAK_SWIFTUI
+	_terminalTabBarController.floatingDragBar = _floatingDragBar;
+	[_terminalController placeTabBarIn:_floatingTabs];
+#endif
+}
+
+- (void)updateFloatingPresentation
+{
+	if(![self usesFloatingPanel] || !_panelVisible || !_layoutView.window)
+	{
+		[_floatingPanel dismiss];
+		return;
+	}
+
+	if(!_floatingPanel)
+		[self prepareFloatingPanel];
+	[self attachFloatingContent];
+	[_floatingPanel showInWindow:_layoutView.window];
+}
+
+- (void)hideFloatingPanel:(id)sender
+{
+	self.panelVisible = NO;
+	if(self.floatingPanelDismissed)
+		self.floatingPanelDismissed();
 }
 
 - (void)setPanelWidth:(CGFloat)width
@@ -372,10 +535,11 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 - (void)rebuildLayout
 {
 	NSWindow* window = _layoutView.window;
+	NSView* panel = _panelVisible && ![self usesFloatingPanel] ? _panelView : nil;
 	NSResponder* responder = window.firstResponder;
 	BOOL restoreFocus = [responder isKindOfClass:NSView.class] &&
 		([(NSView*)responder isDescendantOf:_contentView] ||
-		 (_panelVisible && [(NSView*)responder isDescendantOf:_panelView]));
+		 (panel && [(NSView*)responder isDescendantOf:panel]));
 
 	[NSLayoutConstraint deactivateConstraints:_layoutConstraints];
 	[_layoutConstraints removeAllObjects];
@@ -385,18 +549,18 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 
 	BOOL bottom = [_panelPosition isEqualToString:kTerminalPanelPositionBottom];
 	_layoutView.dividerAlongYAxis = !bottom;
-	_layoutView.divider = _panelVisible ? OakCreateNSBoxSeparator() : nil;
+	_layoutView.divider = panel ? OakCreateNSBoxSeparator() : nil;
 	OakAddAutoLayoutViewsToSuperview(@[ _contentView ], _layoutView);
-	if(_panelVisible)
-		OakAddAutoLayoutViewsToSuperview(@[ _panelView, _layoutView.divider ], _layoutView);
+	if(panel)
+		OakAddAutoLayoutViewsToSuperview(@[ panel, _layoutView.divider ], _layoutView);
 
 	NSDictionary* views = @{
 		@"content": _contentView,
-		@"panel":   _panelView,
+		@"panel":   panel ?: NSNull.null,
 		@"divider": _layoutView.divider ?: NSNull.null,
 	};
 
-	if(!_panelVisible)
+	if(!panel)
 	{
 		CONSTRAINT(@"H:|[content]|");
 		CONSTRAINT(@"V:|[content]|");
@@ -420,10 +584,9 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 		}
 
 		// Below the window's stay-put priority: a smaller window compresses the panel first, and it regains its preferred size when the window grows.
-		_panelSizeConstraint = bottom ? [_panelView.heightAnchor constraintEqualToConstant:_panelHeight] : [_panelView.widthAnchor constraintEqualToConstant:_panelWidth];
+		_panelSizeConstraint = bottom ? [panel.heightAnchor constraintEqualToConstant:_panelHeight] : [panel.widthAnchor constraintEqualToConstant:_panelWidth];
 		_panelSizeConstraint.priority = NSLayoutPriorityDragThatCannotResizeWindow-1;
 		[_layoutConstraints addObject:_panelSizeConstraint];
-
 		NSLayoutConstraint* contentMinimum = bottom ? [_contentView.heightAnchor constraintGreaterThanOrEqualToConstant:kMinimumContentHeight] : [_contentView.widthAnchor constraintGreaterThanOrEqualToConstant:kMinimumContentWidth];
 		contentMinimum.priority = NSLayoutPriorityDragThatCannotResizeWindow;
 		[_layoutConstraints addObject:contentMinimum];
@@ -439,13 +602,14 @@ typedef NS_ENUM(NSInteger, TerminalDividerDrag) {
 
 - (void)dragDivider:(TerminalDividerDrag)phase offset:(NSSize)offset
 {
-	if(!_panelVisible)
+	NSView* panel = _panelVisible ? _panelView : nil;
+	if(!panel)
 		return;
 
 	BOOL bottom = [_panelPosition isEqualToString:kTerminalPanelPositionBottom];
 	if(phase == TerminalDividerDragBegan)
 	{
-		_dragInitialSize = bottom ? NSHeight(_panelView.frame) : NSWidth(_panelView.frame);
+		_dragInitialSize = bottom ? NSHeight(panel.frame) : NSWidth(panel.frame);
 	}
 	else if(phase == TerminalDividerDragMoved)
 	{

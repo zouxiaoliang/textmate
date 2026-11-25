@@ -12,6 +12,15 @@ NSTableRowView* GitListRow(BOOL fullWidthSeparator = NO);
 @interface GitOutlineView : NSOutlineView
 @end
 
+@interface GitEditorTheme : NSObject
+@property (nonatomic) NSColor* background;
+@property (nonatomic) NSColor* foreground;
+@property (nonatomic) NSColor* gutterBackground;
+@property (nonatomic) NSColor* gutterForeground;
+@property (nonatomic) NSAppearance* appearance;
+@property (nonatomic, copy) NSString* syntaxThemeUUID;
+@end
+
 @interface GitDiffView : NSView
 @property (nonatomic) NSImage* fileIcon;
 @property (nonatomic, readonly) NSStackView* headerControls;
@@ -20,7 +29,7 @@ NSTableRowView* GitListRow(BOOL fullWidthSeparator = NO);
 @property (nonatomic) BOOL showsPatch;
 @property (nonatomic) BOOL softWrap;
 @property (nonatomic, copy) NSString* syntaxPath;
-@property (nonatomic, copy) NSString* syntaxThemeUUID;
+@property (nonatomic) GitEditorTheme* editorTheme;
 - (instancetype)initWithFrame:(NSRect)frame inlinePatch:(BOOL)inlinePatch;
 - (CGFloat)wrappedInlineHeightForWidth:(CGFloat)width;
 - (void)setChunkActions:(NSArray<NSNumber*>*)actions handler:(void(^)(NSUInteger index, GitRepositoryAction action))handler;

@@ -123,6 +123,45 @@ void test_terminal_panel_layout ()
 	});
 }
 
+void test_terminal_panel_restores_a_floating_placement_as_bottom ()
+{
+	if(TEXTMATE_ENABLE_FLOATING_TERMINAL)
+		return;
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+		NSDictionary* arguments = [defaults volatileDomainForName:NSArgumentDomain] ?: @{};
+		NSMutableDictionary* placement = [arguments mutableCopy];
+		placement[kUserDefaultsTerminalPanelPlacementKey] = kTerminalPanelPositionFloating;
+		[defaults removeVolatileDomainForName:NSArgumentDomain];
+		[defaults setVolatileDomain:placement forName:NSArgumentDomain];
+		NSView* content = [NSView new];
+		TerminalPanelViewController* controller = MakePanel(content);
+		[defaults removeVolatileDomainForName:NSArgumentDomain];
+		[defaults setVolatileDomain:arguments forName:NSArgumentDomain];
+		OAK_ASSERT([controller.panelPosition isEqual:kTerminalPanelPositionBottom]);
+
+		NSWindow* window = MakeHostWindow(controller);
+		controller.panelPosition = kTerminalPanelPositionRight;
+		controller.panelVisible = YES;
+		controller.panelPosition = kTerminalPanelPositionFloating;
+		[controller startTerminal];
+		LayOut(window, NSMakeSize(1000, 700));
+		NSView* panel = [controller valueForKey:@"panelView"];
+		OAK_ASSERT([controller.panelPosition isEqual:kTerminalPanelPositionBottom]);
+		OAK_ASSERT(panel.window == window && !window.childWindows.count);
+		OAK_ASSERT_GT(NSMinY(content.frame), NSMaxY(panel.frame));
+
+		NSArray* sessions = controller.terminalSessionIdentifiers;
+		controller.panelVisible = NO;
+		OAK_ASSERT(!panel.superview);
+		controller.panelVisible = YES;
+		OAK_ASSERT(panel.window == window && [controller.terminalSessionIdentifiers isEqual:sessions]);
+		[controller stopTerminal];
+		[window close];
+	});
+}
+
 // Content constraints can change before the window's first layout pass (a project window enables its file browser on creation); the content must not be pinned to a frame then.
 void test_terminal_panel_content_is_not_frame_pinned ()
 {
@@ -169,6 +208,7 @@ void test_terminal_panel_constrained_resize ()
 				[child.topAnchor constraintEqualToAnchor:content.topAnchor], [child.bottomAnchor constraintEqualToAnchor:content.bottomAnchor]
 			]];
 			TerminalPanelViewController* c = MakePanel(content);
+			c.panelPosition = kTerminalPanelPositionBottom;
 			NSView* layout = c.view;
 			layout.frame = NSMakeRect(0, 0, 1000, 700);
 			NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1000, 700) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
@@ -189,7 +229,7 @@ void test_terminal_panel_constrained_resize ()
 			OAK_ASSERT([bar isKindOfClass:OakTabBarView.class]);
 			OAK_ASSERT([bar.dataSource numberOfRowsInTabBarView:bar] == 1);
 			NSUUID* firstSession = [bar.dataSource tabBarView:bar UUIDForIndex:0];
-			[bar.delegate tabBarViewDidDoubleClick:bar];
+			[(NSButton*)[bar valueForKey:@"createNewTabButton"] performClick:nil];
 			OAK_ASSERT([bar.dataSource numberOfRowsInTabBarView:bar] == 2);
 			OAK_ASSERT([bar.delegate performDropOfTabItem:firstSession fromTabBar:bar index:0 toTabBar:bar index:2 operation:NSDragOperationMove]);
 			OAK_ASSERT([[bar.dataSource tabBarView:bar UUIDForIndex:1] isEqual:firstSession]);
@@ -302,9 +342,7 @@ void test_terminal_attention_drives_window_subtitle ()
 				// The same fact as a tab tooltip. This reads the data source the tab bar actually installed,
 				// so it proves the wiring up to `OakTabItem`; the `NSToolTip` that OakTabView derives from it
 				// lives in private internals and is not covered by this assertion.
-				// The panel has to be visible for its subviews to be in the layout view's hierarchy.
-				panel.panelVisible = YES;
-				OakTabBarView* tabBar = FindTabBarView(panel.view);
+				OakTabBarView* tabBar = FindTabBarView([panel valueForKey:@"panelView"]);
 				OAK_ASSERT(tabBar != nil);
 				id <OakTabBarViewDataSource> dataSource = tabBar.dataSource;
 				OAK_ASSERT([dataSource respondsToSelector:@selector(tabBarView:toolTipForIndex:)]);

@@ -8,6 +8,7 @@
 #import <text/decode.h>
 #import <document/OakDocument.h>
 #import <document/OakDocumentController.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @implementation AppController (Documents)
 - (void)newDocument:(id)sender
@@ -48,6 +49,39 @@
 	}
 }
 
+- (IBAction)newWorkspace:(id)sender
+{
+	id delegate = NSApp.mainWindow.delegate;
+	DocumentWindowController* controller = [delegate isKindOfClass:DocumentWindowController.class] ? delegate : nil;
+	NSSavePanel* panel = [NSSavePanel savePanel];
+	panel.title = @"New Workspace";
+	panel.nameFieldStringValue = @"Workspace";
+	panel.allowedContentTypes = @[ [UTType typeWithFilenameExtension:@"code-workspace"] ];
+	if(controller.projectPath)
+		panel.directoryURL = [NSURL fileURLWithPath:controller.projectPath isDirectory:YES];
+	if([panel runModal] == NSModalResponseOK)
+	{
+		NSError* error;
+		if(![(controller ?: [DocumentWindowController new]) createWorkspaceAtURL:panel.URL error:&error])
+			[NSApp presentError:error];
+	}
+}
+
+- (IBAction)openWorkspace:(id)sender
+{
+	NSOpenPanel* panel = [NSOpenPanel openPanel];
+	panel.title = @"Open Workspace";
+	panel.canChooseFiles = YES;
+	panel.canChooseDirectories = NO;
+	panel.allowedContentTypes = @[ [UTType typeWithFilenameExtension:@"code-workspace"] ];
+	if([panel runModal] == NSModalResponseOK)
+	{
+		NSError* error;
+		if(![DocumentWindowController openWorkspaceAtURL:panel.URL error:&error])
+			[NSApp presentError:error];
+	}
+}
+
 - (BOOL)application:(NSApplication*)theApplication openFile:(NSString*)aPath
 {
 	if(!DidHandleODBEditorEvent([[NSAppleEventManager.sharedAppleEventManager currentAppleEvent] aeDesc]))
@@ -68,6 +102,11 @@
 			[self openFavorites:self];
 	else	[[DocumentWindowController new] showWindow:self];
 	return YES;
+}
+
+- (void)applicationWillTerminate:(NSNotification*)notification
+{
+	[DocumentWindowController stopAllRunSessions];
 }
 
 - (void)handleTxMtURL:(NSURL*)aURL

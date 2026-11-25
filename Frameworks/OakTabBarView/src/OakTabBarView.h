@@ -15,6 +15,7 @@ typedef NS_ENUM(NSInteger, OakTabStatus) {
 - (void)performClose:(id)sender;
 
 @property (nonatomic) BOOL neverHideLeftBorder;
+@property (nonatomic) BOOL newTabButtonAtTrailingEdge;
 @property (nonatomic, getter=isWindowTitleBar) BOOL windowTitleBar;
 @property (nonatomic, copy) NSString* collapsedTitle;
 @property (nonatomic) NSColor* titleBarBackgroundColor;

@@ -84,15 +84,27 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	return res;
 }
 
+static NSURL* WorkspaceBrowserURL()
+{
+	return [NSURL URLWithString:@"workspace:///"];
+}
+
+@interface WorkspaceFolderItem : FileItem
+@end
+
+@implementation WorkspaceFolderItem
+- (BOOL)canRename { return NO; }
+@end
+
 @interface FileBrowserViewController () <NSMenuDelegate, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate, QLPreviewPanelDataSource, OakUserDefaultsObserver>
 {
 	NSUndoManager* _fileBrowserUndoManager;
 	NSArray<FileItem*>* _previewItems;
 	OakOpenWithMenuDelegate* _openWithMenuDelegate;
 
-	NSMutableDictionary<NSURL*, id>* _fileItemObservers;
+	NSMapTable<FileItem*, id>* _fileItemObservers;
 
-	NSMutableSet<NSURL*>* _loadingURLs;
+	NSMutableSet<FileItem*>* _loadingItems;
 	NSArray<void(^)()>* _loadingURLsCompletionHandlers;
 
 	NSInteger _expandingChildrenCounter;
@@ -113,6 +125,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 @property (nonatomic) NSMutableSet<NSURL*>* selectedURLs;
 
 - (void)expandURLs:(NSArray<NSURL*>*)expandURLs selectURLs:(NSArray<NSURL*>*)selectURLs;
+- (NSURL*)workspaceStateURLForURL:(NSURL*)url rootURL:(NSURL*)rootURL;
+- (NSURL*)stateURLForItem:(FileItem*)item;
 - (NSRect)imageRectOfItem:(FileItem*)item;
 
 - (void)updateDisambiguationSuffixInParent:(FileItem*)item;
@@ -125,6 +139,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 @property (nonatomic) NSMutableArray<NSDictionary*>* history;
 @property (nonatomic) NSInteger historyIndex;
 @property (nonatomic) FileBrowserView* fileBrowserView;
+@property (nonatomic) NSString* workspaceName;
+@property (nonatomic) NSArray<NSDictionary<NSString*, NSString*>*>* workspaceFolders;
 @end
 
 @implementation FileBrowserViewController
@@ -144,8 +160,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 {
 	if(self = [super init])
 	{
-		_fileItemObservers = [NSMutableDictionary dictionary];
-		_loadingURLs       = [NSMutableSet set];
+		_fileItemObservers = [NSMapTable strongToStrongObjectsMapTable];
+		_loadingItems      = [NSMutableSet set];
 
 		_canExpandSymbolicLinks     = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsAllowExpandingLinksKey];
 		_canExpandPackages          = [NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsAllowExpandingPackagesKey];
@@ -161,7 +177,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (void)dealloc
 {
-	for(id observer in _fileItemObservers.allValues)
+	for(id observer in _fileItemObservers.objectEnumerator)
 		[FileItem removeObserver:observer];
 	_fileItemObservers = nil;
 
@@ -305,6 +321,43 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 		[self addHistoryURL:url];
 }
 
+- (void)configureWorkspaceWithName:(NSString*)name folders:(NSArray<NSDictionary<NSString*, NSString*>*>*)folders
+{
+	NSArray* oldFolders = self.workspaceFolders;
+	self.workspaceName = name;
+	self.workspaceFolders = folders;
+	if(![self.URL isEqual:WorkspaceBrowserURL()])
+		return;
+
+	NSMutableSet<NSURL*>* expanded = [self.expandedURLs mutableCopy];
+	NSSet* oldPaths = [NSSet setWithArray:[oldFolders valueForKey:@"path"]];
+	for(NSDictionary* folder in folders)
+	{
+		if(![oldPaths containsObject:folder[@"path"]])
+		{
+			NSURL* root = [NSURL fileURLWithPath:folder[@"path"] isDirectory:YES];
+			[expanded addObject:[self workspaceStateURLForURL:root rootURL:root]];
+		}
+	}
+	[self setURL:WorkspaceBrowserURL()];
+	[self expandURLs:expanded.allObjects selectURLs:nil];
+}
+
+- (void)showWorkspaceFolders:(id)sender
+{
+	if(!self.workspaceName)
+		return;
+	BOOL firstVisit = ![[self.history valueForKey:@"url"] containsObject:WorkspaceBrowserURL()];
+	[self goToURL:WorkspaceBrowserURL()];
+	if(firstVisit)
+	{
+		NSMutableSet<NSURL*>* expanded = [self.expandedURLs mutableCopy];
+		for(FileItem* root in self.fileItem.arrangedChildren)
+			[expanded addObject:[self stateURLForItem:root]];
+		[self expandURLs:expanded.allObjects selectURLs:nil];
+	}
+}
+
 - (void)goToComputer:(id)sender      { [self goToURL:kURLLocationComputer]; }
 - (void)goToHome:(id)sender          { [self goToURL:[NSURL fileURLWithPath:NSHomeDirectory()]]; }
 - (void)goToDesktop:(id)sender       { [self goToURL:[NSFileManager.defaultManager URLForDirectory:NSDesktopDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil]]; }
@@ -320,6 +373,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 - (void)goToSCMDataSource:(id)sender
 {
 	NSURL* url = self.URL;
+	if([url isEqual:WorkspaceBrowserURL()])
+		url = self.workspaceActiveFolder ? [NSURL fileURLWithPath:self.workspaceActiveFolder isDirectory:YES] : nil;
 	if([url.scheme isEqualToString:@"file"])
 	{
 		SCMRepository* repository = [SCMManager.sharedInstance repositoryAtURL:url];
@@ -380,6 +435,20 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	while(menu.numberOfItems > 1)
 		[menu removeItemAtIndex:menu.numberOfItems-1];
 
+	if(self.workspaceName)
+	{
+		[[menu addItemWithTitle:@"Show Workspace Folders" action:@selector(showWorkspaceFolders:) keyEquivalent:@""] setTarget:self];
+		[menu addItem:[NSMenuItem separatorItem]];
+		for(NSDictionary* folder in self.workspaceFolders)
+		{
+			NSMenuItem* entry = [menu addItemWithTitle:[NSString stringWithFormat:@"Use When No File Is Active: %@", folder[@"name"]] action:@selector(takeWorkspaceFolderFrom:) keyEquivalent:@""];
+			entry.representedObject = folder[@"path"];
+			entry.toolTip = folder[@"path"];
+			entry.state = [folder[@"path"] isEqual:self.workspaceFallbackFolder] ? NSControlStateValueOn : NSControlStateValueOff;
+		}
+		[menu addItem:[NSMenuItem separatorItem]];
+	}
+
 	FileItem* fileItem = self.fileItem;
 	while(fileItem = [FileItem fileItemWithURL:fileItem.parentURL])
 	{
@@ -393,7 +462,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	[[menu addItemWithTitle:@"Other…" action:@selector(orderFrontGoToFolder:) keyEquivalent:@""] setTarget:self];
 
 	FileItem* item = self.fileItem;
-	if(NSURL* url = item.URL.filePathURL)
+	if(NSURL* url = self.workspaceName ? nil : item.URL.filePathURL)
 	{
 		[menu addItem:[NSMenuItem separatorItem]];
 		[[menu addItemWithTitle:[NSString stringWithFormat:@"Use “%@” as Project Folder", item.localizedName] action:@selector(takeProjectPathFrom:) keyEquivalent:@""] setRepresentedObject:url.path];
@@ -418,6 +487,13 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	{
 		if(commandKeyDown)
 			[itemsToShowInFinder addObject:item];
+		else if([item isKindOfClass:WorkspaceFolderItem.class])
+		{
+			if([self.outlineView isItemExpanded:item])
+				[self.outlineView collapseItem:item];
+			else
+				[self.outlineView expandItem:item];
+		}
 		else if(item.isDirectory && (treatPackageAsDirectory || !item.isPackage) || item.isLinkToDirectory && (treatPackageAsDirectory || !item.isLinkToPackage) || optionKeyDown && (item.isPackage || item.isLinkToDirectory))
 			[itemsToShowInFileBrowser addObject:item];
 		else if(item.isPackage || item.isLinkToPackage || item.URL.isFileURL && is_binary(item.URL.fileSystemRepresentation))
@@ -786,7 +862,10 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 - (void)cut:(id)sender
 {
 	NSPasteboard* pboard = NSPasteboard.generalPasteboard;
-	if([self writeItems:self.previewableItems toPasteboard:pboard])
+	NSArray* items = [self.previewableItems filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(FileItem* item, NSDictionary* bindings){
+		return ![item isKindOfClass:WorkspaceFolderItem.class];
+	}]];
+	if([self writeItems:items toPasteboard:pboard])
 		[pboard setString:@"cut" forType:@"OakFileBrowserOperation"];
 }
 
@@ -897,7 +976,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	if(clickedRow != -1 && ![selectedRowIndexes containsIndex:clickedRow])
 	{
 		FileItem* item = [outlineView itemAtRow:clickedRow];
-		if(NSURL* url = item.URL.filePathURL)
+		if(NSURL* url = [item isKindOfClass:WorkspaceFolderItem.class] ? nil : item.URL.filePathURL)
 			[self performOperation:FBOperationTrash sourceURLs:@[ url ] destinationURLs:nil unique:NO select:NO];
 	}
 	else
@@ -912,7 +991,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 			[stack removeObjectAtIndex:0];
 
 			NSURL* url = item.URL.filePathURL;
-			if(url && [selectedRowIndexes containsIndex:[outlineView rowForItem:item]])
+			if(url && ![item isKindOfClass:WorkspaceFolderItem.class] && [selectedRowIndexes containsIndex:[outlineView rowForItem:item]])
 			{
 				selectItem = previousItem;
 				[urlsToTrash addObject:url];
@@ -925,6 +1004,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 			}
 		}
 
+		if(!urlsToTrash.count)
+			return;
 		[self performOperation:FBOperationTrash sourceURLs:urlsToTrash destinationURLs:nil unique:NO select:NO];
 
 		NSInteger selectRow = [outlineView rowForItem:selectItem ?: self.fileItem.arrangedChildren.firstObject];
@@ -1142,7 +1223,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	if(newHistory.count)
 	{
 		self.history      = [newHistory mutableCopy];
-		self.historyIndex = std::clamp<NSInteger>([state decodeIntegerForKey:@"historyIndex"], 0, newHistory.count);
+		self.historyIndex = std::clamp<NSInteger>([state decodeIntegerForKey:@"historyIndex"], 0, newHistory.count-1);
 
 		NSArray<NSURL*>* expandedURLs = [state decodeObjectForKey:@"expandedURLs"];
 		NSArray<NSURL*>* selectedURLs = [state decodeObjectForKey:@"selectedURLs"];
@@ -1230,7 +1311,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 		if(newHistory.count)
 		{
 			self.history      = newHistory;
-			self.historyIndex = std::clamp([fileBrowserState[@"historyIndex"] unsignedIntegerValue], (NSUInteger)0, newHistory.count);
+			self.historyIndex = std::clamp([fileBrowserState[@"historyIndex"] unsignedIntegerValue], (NSUInteger)0, newHistory.count-1);
 
 			NSMutableArray<NSURL*>* expandedURLs = [NSMutableArray array];
 			for(NSString* urlString in fileBrowserState[@"expanded"])
@@ -1264,6 +1345,25 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (void)selectURL:(NSURL*)url withParentURL:(NSURL*)parentURL
 {
+	if(self.workspaceName && parentURL)
+	{
+		[self showWorkspaceFolders:self];
+		NSMutableSet<NSURL*>* expandURLs = [self.expandedURLs mutableCopy];
+		NSString* rootPath = parentURL.path;
+		NSString* itemPath = url.path.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+		NSString* directory = itemPath.stringByDeletingLastPathComponent;
+		while([rootPath isEqualToString:@"/"] || path::is_child(to_s(directory), to_s(rootPath)))
+		{
+			NSURL* folder = [NSURL fileURLWithPath:directory isDirectory:YES];
+			[expandURLs addObject:[self workspaceStateURLForURL:folder rootURL:parentURL]];
+			if([directory isEqualToString:rootPath])
+				break;
+			directory = directory.stringByDeletingLastPathComponent;
+		}
+		[self expandURLs:expandURLs.allObjects selectURLs:@[ [self workspaceStateURLForURL:[NSURL fileURLWithPath:itemPath isDirectory:url.hasDirectoryPath] rootURL:parentURL] ]];
+		return;
+	}
+
 	NSURL* fileReferenceURL = url.fileReferenceURL;
 	for(NSInteger i = 0; i < self.outlineView.numberOfRows; ++i)
 	{
@@ -1527,6 +1627,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (void)rearrangeChildrenInParent:(FileItem*)item
 {
+	if([item.URL isEqual:WorkspaceBrowserURL()])
+		return;
 	NSMutableArray<FileItem*>* existingChildren = item.arrangedChildren;
 	if(existingChildren && existingChildren.count * item.children.count < 250000)
 	{
@@ -1690,9 +1792,10 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 		_expandedURLs = [self.expandedURLs mutableCopy];
 		_selectedURLs = [self.selectedURLs mutableCopy];
 
-		for(id observer in _fileItemObservers.allValues)
+		for(id observer in _fileItemObservers.objectEnumerator)
 			[FileItem removeObserver:observer];
-		_fileItemObservers = [NSMutableDictionary dictionary];
+		[_fileItemObservers removeAllObjects];
+		[_loadingItems removeAllObjects];
 	}
 
 	_fileItem = item;
@@ -1729,7 +1832,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	[self.outlineView deselectAll:self];
 	[self.outlineView scrollRowToVisible:0];
 
-	[self loadChildrenForItem:item expandChildren:NO];
+	if(item && ![item.URL isEqual:WorkspaceBrowserURL()])
+		[self loadChildrenForItem:item expandChildren:NO];
 
 	[self invalidateRestorableState];
 }
@@ -1737,96 +1841,63 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 - (void)outlineViewItemDidExpand:(NSNotification*)aNotification
 {
 	FileItem* item = aNotification.userInfo[@"NSObject"];
-	[self loadChildrenForItem:item expandChildren:_expandingChildrenCounter > 0];
+	if(item && self.workspaceName && [self.URL isEqual:WorkspaceBrowserURL()])
+		[_expandedURLs addObject:[self stateURLForItem:item]];
+	if(item)
+		[self loadChildrenForItem:item expandChildren:_expandingChildrenCounter > 0];
 	[self invalidateRestorableState];
+	[self notifyWorkspaceStateChanged];
 }
 
 - (void)loadChildrenForItem:(FileItem*)item expandChildren:(BOOL)flag
 {
-	if(item.arrangedChildren || item.children)
+	if(item.arrangedChildren || item.children || item.isMissing || [_fileItemObservers objectForKey:item])
 		return;
 
-	NSURL* url = item.URL;
-
-	if(_fileItemObservers[url])
-	{
-		// ================
-		// = Debug Output =
-		// ================
-
-		NSMutableArray<NSString*>* itemInfo = [NSMutableArray array];
-
-		NSMutableArray<FileItem*>* stack = [NSMutableArray arrayWithObject:self.fileItem];
-		while(FileItem* item = stack.firstObject)
-		{
-			if(item.isDirectory)
-			{
-				NSMutableString* info = [item.URL.path mutableCopy];
-				if(item == self.fileItem || [self.outlineView isItemExpanded:item])
-					[info appendString:@" [expanded]"];
-				if([_fileItemObservers objectForKey:item.URL])
-					[info appendString:@" [observing]"];
-				if([_loadingURLs containsObject:item.URL])
-					[info appendString:@" [loading]"];
-				if(item.arrangedChildren || item.children)
-					[info appendFormat:@" [%lu / %lu children]", item.arrangedChildren.count, item.children.count];
-				[itemInfo addObject:info];
-			}
-
-			[stack removeObjectAtIndex:0];
-			if(NSArray<FileItem*>* children = item.arrangedChildren)
-				[stack addObjectsFromArray:children];
-		}
-
-		NSLog(@"%s *** Observer already exists for: %@\n%@", sel_getName(_cmd), url, [itemInfo componentsJoinedByString:@"\n"]);
-
-		// ===================================
-		// = Temporary (possible) workaround =
-		// ===================================
-
-		[FileItem removeObserver:_fileItemObservers[url]];
-		_fileItemObservers[url] = nil;
-	}
-
-	[_loadingURLs addObject:url];
+	[_loadingItems addObject:item];
 
 	__weak FileBrowserViewController* weakSelf = self;
-	_fileItemObservers[url] = [FileItem addObserverToDirectoryAtURL:item.resolvedURL usingBlock:^(NSArray<NSURL*>* urls){
-		[weakSelf didReceiveURLs:urls forItemWithURL:url expandChildren:flag];
+	__weak FileItem* weakItem = item;
+	id observer = [FileItem addObserverToDirectoryAtURL:item.resolvedURL usingBlock:^(NSArray<NSURL*>* urls){
+		if(FileItem* observedItem = weakItem)
+			[weakSelf didReceiveURLs:urls forItem:observedItem expandChildren:flag];
 	}];
+	[_fileItemObservers setObject:observer forKey:item];
 }
 
-- (FileItem*)findItemForURL:(NSURL*)url
+- (NSURL*)workspaceStateURLForURL:(NSURL*)url rootURL:(NSURL*)rootURL
 {
-	NSMutableArray<FileItem*>* stack = [NSMutableArray arrayWithObject:self.fileItem];
-	while(FileItem* item = stack.firstObject)
-	{
-		[stack removeObjectAtIndex:0];
-		if([item.URL isEqual:url])
-			return item;
-		if(NSArray<FileItem*>* children = item.arrangedChildren)
-			[stack addObjectsFromArray:children];
-	}
-	return nil;
+	NSURLComponents* components = [NSURLComponents new];
+	components.scheme = @"workspace-item";
+	components.path = rootURL.path;
+	components.queryItems = @[ [NSURLQueryItem queryItemWithName:@"path" value:url.path] ];
+	return components.URL;
 }
 
-- (void)didReceiveURLs:(NSArray<NSURL*>*)urls forItemWithURL:(NSURL*)url expandChildren:(BOOL)flag
+- (NSURL*)stateURLForItem:(FileItem*)item
 {
-	FileItem* item = [self findItemForURL:url];
-	if(!item)
+	if([self.URL isEqual:WorkspaceBrowserURL()])
 	{
-		NSLog(@"%s *** unable to find item for %@", sel_getName(_cmd), url);
+		FileItem* root = item;
+		while(FileItem* parent = [self.outlineView parentForItem:root])
+			root = parent;
+		if([root isKindOfClass:WorkspaceFolderItem.class])
+			return [self workspaceStateURLForURL:item.URL rootURL:root.URL];
 	}
-	else if(item != self.fileItem && ![self.outlineView isItemExpanded:item])
-	{
-		NSLog(@"%s *** item no longer expanded: %@", sel_getName(_cmd), item);
+	return item.URL;
+}
 
+- (void)didReceiveURLs:(NSArray<NSURL*>*)urls forItem:(FileItem*)item expandChildren:(BOOL)flag
+{
+	if(item != self.fileItem && ([self.outlineView rowForItem:item] == -1 || ![self.outlineView isItemExpanded:item]))
+	{
 		item.children = nil;
 		item.arrangedChildren = nil;
-		[self.outlineView reloadItem:item reloadChildren:YES];
+		if([self.outlineView rowForItem:item] != -1)
+			[self.outlineView reloadItem:item reloadChildren:YES];
 
-		[FileItem removeObserver:_fileItemObservers[url]];
-		_fileItemObservers[url] = nil;
+		[FileItem removeObserver:[_fileItemObservers objectForKey:item]];
+		[_fileItemObservers removeObjectForKey:item];
 	}
 	else
 	{
@@ -1860,24 +1931,27 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 		for(FileItem* child in item.arrangedChildren)
 		{
-			if((flag && !child.isSymbolicLink || [_expandedURLs containsObject:child.URL] || [child.URL.scheme isEqualToString:@"scm"]) && [self.outlineView isExpandable:child])
+			NSURL* stateURL = [self stateURLForItem:child];
+			if((flag && !child.isSymbolicLink || [_expandedURLs containsObject:stateURL] || [child.URL.scheme isEqualToString:@"scm"]) && [self.outlineView isExpandable:child])
 				[self.outlineView expandItem:child expandChildren:flag && !child.isSymbolicLink];
 
-			if([_selectedURLs containsObject:child.URL])
+			NSInteger row = [self.outlineView rowForItem:child];
+			if(row >= 0 && ([_selectedURLs containsObject:stateURL] || [_selectedURLs containsObject:child.URL]))
 			{
-				[self.outlineView selectRowIndexes:[NSIndexSet indexSetWithIndex:[self.outlineView rowForItem:child]] byExtendingSelection:YES];
+				[self.outlineView selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:YES];
+				[_selectedURLs removeObject:stateURL];
 				[_selectedURLs removeObject:child.URL];
 			}
 		}
 	}
 
-	[_loadingURLs removeObject:url];
+	[_loadingItems removeObject:item];
 	[self checkLoadCompletionHandlers];
 }
 
 - (void)checkLoadCompletionHandlers
 {
-	if(_loadingURLs.count == 0)
+	if(_loadingItems.count == 0)
 	{
 		NSArray<void(^)()>* completionHandlers = _loadingURLsCompletionHandlers;
 		_loadingURLsCompletionHandlers = nil;
@@ -1899,7 +1973,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	while(FileItem* item = stack.firstObject)
 	{
 		[stack removeObjectAtIndex:0];
-		if([_expandedURLs containsObject:item.URL])
+		if([_expandedURLs containsObject:[self stateURLForItem:item]])
 		{
 			[self.outlineView expandItem:item];
 			if(NSArray<FileItem*>* arrangedChildren = item.arrangedChildren)
@@ -1911,7 +1985,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	for(NSUInteger i = 0; i < self.outlineView.numberOfRows; ++i)
 	{
 		FileItem* item = [self.outlineView itemAtRow:i];
-		if([_selectedURLs containsObject:item.URL])
+		if([_selectedURLs containsObject:[self stateURLForItem:item]] || [_selectedURLs containsObject:item.URL])
 			[indexesToSelect addIndex:i];
 	}
 	[self.outlineView selectRowIndexes:indexesToSelect byExtendingSelection:NO];
@@ -1943,7 +2017,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 {
 	FileItem* item = aNotification.userInfo[@"NSObject"];
 	if(_nestedCollapsingChildrenCounter == 0 || _collapsingChildrenCounter > 0)
-		[_expandedURLs removeObject:item.URL];
+		[_expandedURLs removeObject:[self stateURLForItem:item]];
 
 	_nestedCollapsingChildrenCounter += 1;
 }
@@ -1953,12 +2027,21 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	_nestedCollapsingChildrenCounter -= 1;
 
 	if(_nestedCollapsingChildrenCounter == 0)
+	{
 		[self invalidateRestorableState];
+		[self notifyWorkspaceStateChanged];
+	}
 }
 
 - (void)outlineViewSelectionDidChange:(NSNotification*)aNotification
 {
 	[self invalidateRestorableState];
+}
+
+- (void)notifyWorkspaceStateChanged
+{
+	if(self.workspaceName && [self.delegate respondsToSelector:@selector(fileBrowserDidChangeWorkspaceState:)])
+		[self.delegate fileBrowserDidChangeWorkspaceState:self];
 }
 
 // ================
@@ -1972,23 +2055,49 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (void)setURL:(NSURL*)url
 {
-	if(FileItem* item = [FileItem fileItemWithURL:url])
+	FileItem* item;
+	if([url isEqual:WorkspaceBrowserURL()] && self.workspaceName)
+	{
+		item = [[FileItem alloc] initWithURL:url];
+		item.localizedName = self.workspaceName;
+		NSMutableArray* roots = [NSMutableArray array];
+		for(NSDictionary* folder in self.workspaceFolders)
+		{
+			FileItem* root = [[WorkspaceFolderItem alloc] initWithURL:[NSURL fileURLWithPath:folder[@"path"] isDirectory:YES]];
+			root.localizedName = folder[@"name"];
+			root.toolTip = folder[@"path"];
+			BOOL isDirectory = NO;
+			root.missing = ![NSFileManager.defaultManager fileExistsAtPath:folder[@"path"] isDirectory:&isDirectory] || !isDirectory;
+			[roots addObject:root];
+		}
+		item.children = roots;
+		item.arrangedChildren = roots;
+	}
+	else
+		item = [FileItem fileItemWithURL:url];
+	if(item)
 	{
 		if(![self.URL isEqual:item.URL])
 			self.fileBrowserView.folderCollapsed = NO;
+		((FileBrowserOutlineView*)self.outlineView).rootIndentation = [url isEqual:WorkspaceBrowserURL()] ? kOakSidebarIndentation : 2 * kOakSidebarIndentation;
 		self.fileItem = item;
+		if([url isEqual:WorkspaceBrowserURL()])
+			[self expandURLs:nil selectURLs:nil];
 	}
 }
 
 - (void)reload:(id)sender
 {
+	if(!self.fileItem)
+		return;
 	NSMutableArray<FileItem*>* stack = [NSMutableArray arrayWithObject:self.fileItem];
 	while(FileItem* item = stack.firstObject)
 	{
 		[stack removeObjectAtIndex:0];
 		if(!item.arrangedChildren)
 			continue;
-		[FSEventsManager.sharedInstance reloadDirectoryAtURL:item.resolvedURL];
+		if(![item.URL isEqual:WorkspaceBrowserURL()])
+			[FSEventsManager.sharedInstance reloadDirectoryAtURL:item.resolvedURL];
 		[stack addObjectsFromArray:item.arrangedChildren];
 	}
 }
@@ -2013,7 +2122,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	NSMutableArray<NSURL*>* candidates = [NSMutableArray array];
 	for(FileItem* item in self.selectedItems)
 	{
-		if(item.resolvedURL.isFileURL && [self.outlineView isItemExpanded:item])
+		if(item.resolvedURL.isFileURL && ([self.outlineView isItemExpanded:item] || [item isKindOfClass:WorkspaceFolderItem.class] && !item.isMissing))
 		{
 			[candidates addObject:item.resolvedURL];
 		}
@@ -2023,7 +2132,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 				[candidates addObject:parentItem.resolvedURL];
 		}
 	}
-	return candidates.lastObject ?: self.fileItem.URL.filePathURL;
+	return candidates.lastObject ?: self.fileItem.URL.filePathURL ?: (self.workspaceActiveFolder ? [NSURL fileURLWithPath:self.workspaceActiveFolder isDirectory:YES] : nil);
 }
 
 - (void)centerSelectionInVisibleArea:(id)sender
@@ -2047,8 +2156,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	{
 		FileItem* item = [self.outlineView itemAtRow:i];
 		if([selectedIndexes containsIndex:i])
-				[res addObject:item.URL];
-		else	[res removeObject:item.URL];
+				[res addObject:[self stateURLForItem:item]];
+		else	[res removeObject:[self stateURLForItem:item]];
 	}
 	return [res copy];
 }
@@ -2060,8 +2169,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 	{
 		FileItem* item = [self.outlineView itemAtRow:i];
 		if([self.outlineView isItemExpanded:item] && ![item.URL.scheme isEqualToString:@"scm"])
-				[res addObject:item.URL];
-		else	[res removeObject:item.URL];
+				[res addObject:[self stateURLForItem:item]];
+		else	[res removeObject:[self stateURLForItem:item]];
 	}
 	return [res copy];
 }
@@ -2082,6 +2191,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (BOOL)outlineView:(NSOutlineView*)outlineView isItemExpandable:(FileItem*)item
 {
+	if([item isKindOfClass:WorkspaceFolderItem.class])
+		return !item.isMissing;
 	return item.isDirectory && (_canExpandPackages || !item.isPackage) || (_canExpandSymbolicLinks && item.isLinkToDirectory && (_canExpandPackages || !item.isLinkToPackage));
 }
 
@@ -2102,7 +2213,7 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 
 - (id <NSPasteboardWriting>)outlineView:(NSOutlineView*)outlineView pasteboardWriterForItem:(FileItem*)item
 {
-	return item.URL.filePathURL;
+	return [item isKindOfClass:WorkspaceFolderItem.class] ? nil : item.URL.filePathURL;
 }
 
 // ===============================
@@ -2157,6 +2268,8 @@ static NSMutableIndexSet* MutableLongestCommonSubsequence (NSArray* lhs, NSArray
 		return NO;
 
 	FileItem* item = [self.outlineView itemAtRow:row];
+	if(!item.canRename)
+		return YES;
 	NSURL* newURL = [[item.URL URLByDeletingLastPathComponent] URLByAppendingPathComponent:fieldEditor.string isDirectory:item.isDirectory];
 	if(![item.URL isEqual:newURL])
 	{

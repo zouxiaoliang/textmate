@@ -129,7 +129,7 @@
 {
 	client.URLObserver = self;
 	[_clients addObject:client];
-	if(_cachedURLs && _cachedURLs.count)
+	if(_cachedURLs)
 		client.handler(_cachedURLs);
 }
 

@@ -13,9 +13,9 @@ private final class TerminalContainer: NSView {
     weak var controller: OakTerminalPanelController?
     override func layout() {
         super.layout()
-        // The container sets the bar's frame, so its height comes from what the bar asks for.
-        let barHeight = min(max(0, tabBar?.intrinsicContentSize.height ?? 0), bounds.height)
-        tabBar?.frame = NSRect(x: 0, y: 0, width: bounds.width, height: barHeight)
+        let embeddedBar = tabBar?.superview === self ? tabBar : nil
+        let barHeight = min(max(0, embeddedBar?.intrinsicContentSize.height ?? 0), bounds.height)
+        embeddedBar?.frame = NSRect(x: 0, y: 0, width: bounds.width, height: barHeight)
         emptyLabel.frame = NSRect(x: 8, y: barHeight + max(0, (bounds.height - barHeight) / 2 - 10), width: max(0, bounds.width - 16), height: 20)
         let padding: CGFloat = 6
         terminal?.frame = NSRect(x: padding, y: barHeight + padding, width: max(32, bounds.width - 2 * padding), height: max(32, bounds.height - barHeight - 2 * padding))
@@ -81,9 +81,19 @@ private final class TerminalContainer: NSView {
         guard let container = view as? TerminalContainer else { return }
         container.tabBar?.removeFromSuperview()
         container.tabBar = tabBar
-        container.addSubview(tabBar)
-        container.needsLayout = true
+        placeTabBar(in: nil)
         rebuildTabs()
+    }
+
+    @objc public func placeTabBar(in host: NSView?) {
+        guard let container = view as? TerminalContainer, let tabBar = container.tabBar else { return }
+        let destination = host ?? container
+        guard tabBar.superview !== destination else { return }
+        tabBar.removeFromSuperview()
+        tabBar.autoresizingMask = host == nil ? [] : [.width, .height]
+        if host != nil { tabBar.frame = destination.bounds }
+        destination.addSubview(tabBar)
+        container.needsLayout = true
     }
 
     @objc public func selectSession(at index: Int) {
@@ -383,7 +393,10 @@ private final class TerminalContainer: NSView {
         let hadFocus = (view.window?.firstResponder as? NSView)?.isDescendant(of: view) == true
         container.terminal?.removeFromSuperview()
         container.terminal = terminal
-        if let terminal { container.addSubview(terminal, positioned: .below, relativeTo: container.tabBar) }
+        if let terminal {
+            let embeddedBar = container.tabBar?.superview === container ? container.tabBar : nil
+            container.addSubview(terminal, positioned: .below, relativeTo: embeddedBar)
+        }
         container.emptyLabel.isHidden = terminal != nil
         rebuildTabs()
         container.needsLayout = true

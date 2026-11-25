@@ -68,6 +68,12 @@ void OakOpenDocuments (NSArray* paths, BOOL treatFilePackageAsFolder)
 		{
 			[OakDocumentController.sharedInstance showFileBrowserAtPath:path];
 		}
+		else if([pathExt isEqualToString:@"code-workspace"])
+		{
+			NSError* error;
+			if(![DocumentWindowController openWorkspaceAtURL:[NSURL fileURLWithPath:path] error:&error])
+				[NSApp presentError:error];
+		}
 		else
 		{
 			[documents addObject:[OakDocumentController.sharedInstance documentWithPath:path]];
@@ -134,6 +140,11 @@ BOOL HasDocumentWindow (NSArray* windows)
 #if HAVE_OAK_SWIFTUI
 				{ @"Manage Recent Projects…", @selector(manageRecentProjects:)            },
 #endif
+				{ /* -------- */ },
+				{ @"New Workspace…",          @selector(newWorkspace:) },
+				{ @"Open Workspace…",         @selector(openWorkspace:) },
+				{ @"Add Folders to Workspace…", @selector(addWorkspaceFolder:) },
+				{ @"Remove Folder from Workspace…", @selector(removeWorkspaceFolder:) },
 				{ /* -------- */ },
 				{ @"Close",                   @selector(performClose:),             @"w"   },
 				{ @"Close Window",            @selector(performCloseWindow:),       @"W"   },
@@ -256,6 +267,10 @@ BOOL HasDocumentWindow (NSArray* windows)
 				{ @"Switch to Git Mode", @selector(showGitWorkspace:), @"g", .modifierFlags = NSEventModifierFlagControl|NSEventModifierFlagShift },
 				{ @"Show Source Control Sidebar", @selector(toggleSourceControl:) },
 				{ @"Terminal Panel Position", .submenu = {
+#if TEXTMATE_ENABLE_FLOATING_TERMINAL
+					{ @"Floating", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionFloating },
+					{ /* -------- */ },
+#endif
 					{ @"Left", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionLeft },
 					{ @"Right", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionRight },
 					{ @"Bottom", @selector(takeTerminalPanelPositionFrom:), .representedObject = kTerminalPanelPositionBottom },
@@ -431,6 +446,21 @@ BOOL HasDocumentWindow (NSArray* windows)
 				{ /* -------- */ },
 				{ @"Go to Folder…",    @selector(orderFrontGoToFolder:)           },
 				{ @"Reload",           @selector(reload:)                         },
+			}
+		},
+		{ @"Run",
+			.submenu = {
+				{ @"Show Run & Debug", @selector(showRunPanel:) },
+				{ @"Show Output", @selector(showRunOutput:) },
+				{ @"Configure Run & Debug…", @selector(configureRunPanel:) },
+				{ @"Start Debugging / Continue", @selector(debugSelectedConfiguration:), .modifierFlags = 0, .key = NSF5FunctionKey },
+				{ @"Run Without Debugging", @selector(runSelectedConfiguration:), .modifierFlags = NSEventModifierFlagControl, .key = NSF5FunctionKey },
+				{ @"Toggle Breakpoint", @selector(toggleProjectBreakpoint:), .modifierFlags = 0, .key = NSF9FunctionKey },
+				{ @"Step Over", @selector(stepOverProjectDebugging:), .modifierFlags = 0, .key = NSF10FunctionKey },
+				{ @"Step Into", @selector(stepIntoProjectDebugging:), .modifierFlags = 0, .key = NSF11FunctionKey },
+				{ @"Step Out", @selector(stepOutOfProjectDebugging:), .modifierFlags = NSEventModifierFlagShift, .key = NSF11FunctionKey },
+				{ @"Restart Last Run", @selector(restartRunConfiguration:), .modifierFlags = NSEventModifierFlagControl | NSEventModifierFlagShift, .key = NSF5FunctionKey },
+				{ @"Stop", @selector(stopRunConfiguration:), .modifierFlags = NSEventModifierFlagShift, .key = NSF5FunctionKey },
 			}
 		},
 		{ @"Bundles",

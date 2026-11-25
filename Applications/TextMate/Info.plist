@@ -1243,6 +1243,20 @@
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
+				<string>code-workspace</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>Text</string>
+			<key>CFBundleTypeName</key>
+			<string>Code Workspace</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>nfo</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>

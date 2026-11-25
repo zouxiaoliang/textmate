@@ -28,12 +28,17 @@
 
 static NSString* const kBookmarksColumnIdentifier = @"bookmarks";
 static NSString* const kFoldingsColumnIdentifier  = @"foldings";
+static NSString* const kDebugColumnIdentifier     = @"debug";
 
 @interface OakDocumentView () <NSAccessibilityGroup, GutterViewDelegate, GutterViewColumnDataSource, GutterViewColumnDelegate, OTVStatusBarDelegate>
 {
 	NSScrollView* gutterScrollView;
 	GutterView* gutterView;
 	NSMutableDictionary* gutterImages;
+	NSIndexSet* debugBreakpoints;
+	NSIndexSet* disabledDebugBreakpoints;
+	NSIndexSet* unverifiedDebugBreakpoints;
+	NSUInteger debugExecutionLine;
 
 	OakBackgroundFillView* gutterDividerView;
 
@@ -80,6 +85,9 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 		gutterView.delegate    = self;
 		[gutterView insertColumnWithIdentifier:kBookmarksColumnIdentifier atPosition:0 dataSource:self delegate:self];
 		[gutterView insertColumnWithIdentifier:kFoldingsColumnIdentifier atPosition:2 dataSource:self delegate:self];
+		debugExecutionLine = NSNotFound;
+		[gutterView insertColumnWithIdentifier:kDebugColumnIdentifier atPosition:0 dataSource:self delegate:self];
+		[gutterView setVisibility:NO forColumnWithIdentifier:kDebugColumnIdentifier];
 		if([NSUserDefaults.standardUserDefaults boolForKey:@"DocumentView Disable Line Numbers"])
 			[gutterView setVisibility:NO forColumnWithIdentifier:GVLineNumbersColumnIdentifier];
 		[gutterView setTranslatesAutoresizingMaskIntoConstraints:NO];
@@ -863,12 +871,75 @@ static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
 
 - (CGFloat)widthForColumnWithIdentifier:(id)columnIdentifier
 {
+	if([columnIdentifier isEqual:kDebugColumnIdentifier])
+		return MAX(11, round(self.lineHeight * 0.82));
 	return floor((self.lineHeight-1) / 2) * 2 + 1;
+}
+
+- (void)showDebugGutter:(BOOL)visible breakpoints:(NSIndexSet*)breakpoints disabledBreakpoints:(NSIndexSet*)disabled unverifiedBreakpoints:(NSIndexSet*)unverified executionLine:(NSUInteger)line
+{
+	debugBreakpoints = [breakpoints copy];
+	disabledDebugBreakpoints = [disabled copy];
+	unverifiedDebugBreakpoints = [unverified copy];
+	debugExecutionLine = line;
+	[gutterView setVisibility:visible forColumnWithIdentifier:kDebugColumnIdentifier];
+	[gutterView setNeedsDisplay:YES];
+}
+
+- (NSImage*)debugGutterImage:(NSString*)kind
+{
+	gutterImages = gutterImages ?: [NSMutableDictionary new];
+	NSImage* image = gutterImages[kind];
+	if(!image)
+	{
+		CGFloat size = MAX(7, round(self.lineHeight * 0.64));
+		image = [NSImage imageWithSize:NSMakeSize(size, size) flipped:NO drawingHandler:^BOOL(NSRect rect){
+			NSRect glyph = NSInsetRect(rect, 1, 1);
+			if([kind isEqual:@"execution-arrow"])
+			{
+				[NSColor.systemOrangeColor setFill];
+				NSBezierPath* arrow = [NSBezierPath bezierPath];
+				[arrow moveToPoint:NSMakePoint(NSMinX(glyph), NSMinY(glyph))];
+				[arrow lineToPoint:NSMakePoint(NSMaxX(glyph), NSMidY(glyph))];
+				[arrow lineToPoint:NSMakePoint(NSMinX(glyph), NSMaxY(glyph))];
+				[arrow closePath];
+				[arrow fill];
+			}
+			else if([kind isEqual:@"breakpoint"])
+			{
+				[NSColor.systemRedColor setFill];
+				[[NSBezierPath bezierPathWithOvalInRect:glyph] fill];
+			}
+			else
+			{
+				NSColor* color = [kind isEqual:@"breakpoint-disabled"] ? NSColor.secondaryLabelColor :
+				                 [kind isEqual:@"breakpoint-unverified"] ? NSColor.systemOrangeColor : NSColor.systemRedColor;
+				[color setStroke];
+				[[NSBezierPath bezierPathWithOvalInRect:glyph] stroke];
+			}
+			return YES;
+		}];
+		gutterImages[kind] = image;
+	}
+	return image;
 }
 
 - (NSImage*)imageForLine:(NSUInteger)lineNumber inColumnWithIdentifier:(id)columnIdentifier state:(GutterViewRowState)rowState
 {
-	if([columnIdentifier isEqualToString:kBookmarksColumnIdentifier])
+	if([columnIdentifier isEqualToString:kDebugColumnIdentifier])
+	{
+		if(lineNumber == debugExecutionLine)
+			return [self debugGutterImage:@"execution-arrow"];
+		if([debugBreakpoints containsIndex:lineNumber + 1])
+			return [self debugGutterImage:@"breakpoint"];
+		if([disabledDebugBreakpoints containsIndex:lineNumber + 1])
+			return [self debugGutterImage:@"breakpoint-disabled"];
+		if([unverifiedDebugBreakpoints containsIndex:lineNumber + 1])
+			return [self debugGutterImage:@"breakpoint-unverified"];
+		if(self.toggleBreakpointAtLine && rowState != GutterViewRowStateRegular)
+			return [self debugGutterImage:@"breakpoint-hover"];
+	}
+	else if([columnIdentifier isEqualToString:kBookmarksColumnIdentifier])
 	{
 		// Show lightbulb only when server confirmed actions are available for this line
 		if(lineNumber == _cursorLine && _cursorLineHasActions)
@@ -941,7 +1012,12 @@ static NSArray<NSDictionary*>* FlattenDocumentSymbols (id raw)
 
 - (void)userDidClickColumnWithIdentifier:(id)columnIdentifier atLine:(NSUInteger)lineNumber
 {
-	if([columnIdentifier isEqualToString:kBookmarksColumnIdentifier])
+	if([columnIdentifier isEqualToString:kDebugColumnIdentifier])
+	{
+		if(self.toggleBreakpointAtLine)
+			self.toggleBreakpointAtLine(lineNumber + 1);
+	}
+	else if([columnIdentifier isEqualToString:kBookmarksColumnIdentifier])
 	{
 		// Lightbulb click triggers code actions
 		if(lineNumber == _cursorLine && _cursorLineHasActions)

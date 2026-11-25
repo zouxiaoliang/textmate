@@ -92,6 +92,19 @@ struct CommandPaletteView: View {
 				.textFieldStyle(.plain)
 				.font(.system(size: theme.fontSize, design: .monospaced))
 				.focused($isSearchFieldFocused)
+			if viewModel.isSearching {
+				ProgressView().controlSize(.small)
+			}
+			if !viewModel.searchScopes.isEmpty {
+				Picker("Search scope", selection: $viewModel.searchScope) {
+					ForEach(viewModel.searchScopes.indices, id: \.self) { index in
+						Text(viewModel.searchScopes[index]).tag(index)
+					}
+				}
+				.labelsHidden()
+				.fixedSize()
+				.onChange(of: viewModel.searchScope) { _, _ in isSearchFieldFocused = true }
+			}
 		}
 		.padding(.horizontal, 12)
 		.padding(.vertical, 8)
@@ -112,7 +125,7 @@ struct CommandPaletteView: View {
 			ScrollView(.vertical) {
 				LazyVStack(spacing: 0) {
 					if viewModel.filteredItems.isEmpty {
-						Text(viewModel.queryText.isEmpty ? "No items to show" : "No matching results")
+						Text(viewModel.isSearching ? "Searching…" : viewModel.queryText.isEmpty ? "No items to show" : "No matching results")
 							.font(.system(size: theme.fontSize))
 							.foregroundStyle(.secondary)
 							.frame(maxWidth: .infinity, alignment: .leading)

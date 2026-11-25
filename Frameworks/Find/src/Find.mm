@@ -457,7 +457,9 @@ static NSButton* OakCreateHistoryButton (NSString* toolTip)
 
 - (void)updateWindowTitle
 {
-	if(NSString* folder = self.searchFolder)
+	if(_searchTarget == FFSearchTargetProject && self.workspaceFolders)
+		self.window.title = @"Find — Workspace";
+	else if(NSString* folder = self.searchFolder)
 		self.window.title = [NSString localizedStringWithFormat:@"Find — %@", [folder stringByAbbreviatingWithTildeInPath]];
 	else if(_searchTarget == FFSearchTargetOpenFiles)
 		self.window.title = @"Find — Open Files";
@@ -566,7 +568,7 @@ static NSButton* OakCreateHistoryButton (NSString* toolTip)
 		{ @"Selection",           @selector(orderFrontFindPanel:),        .tag = FFSearchTargetSelection         },
 		{ /* -------- */ },
 		{ @"Open Files",          @selector(orderFrontFindPanel:),        .tag = FFSearchTargetOpenFiles         },
-		{ @"Project Folder",      @selector(orderFrontFindPanel:),  @"F", .tag = FFSearchTargetProject           },
+		{ self.workspaceFolders ? @"Workspace Folders" : @"Project Folder", @selector(orderFrontFindPanel:), @"F", .tag = FFSearchTargetProject },
 		{ @"File Browser Items",  @selector(orderFrontFindPanel:),        .tag = FFSearchTargetFileBrowserItems  },
 		{ @"Other Folder…",       @selector(showFolderSelectionPanel:),   .tag = FFSearchTargetOther             },
 		{ /* -------- */ },
@@ -586,9 +588,23 @@ static NSButton* OakCreateHistoryButton (NSString* toolTip)
 		[FFFolderMenu addSubmenuForDirectoryAtPath:lastFolder toMenuItem:folderItem];
 	}
 
-	if(_searchTarget == FFSearchTargetProject || _searchTarget == FFSearchTargetOther || (_searchTarget == FFSearchTargetFileBrowserItems && _fileBrowserItems.count == 1))
+	if((_searchTarget == FFSearchTargetProject && !self.workspaceFolders) || _searchTarget == FFSearchTargetOther || (_searchTarget == FFSearchTargetFileBrowserItems && _fileBrowserItems.count == 1))
 			[_wherePopUpButton selectItem:folderItem];
 	else	[_wherePopUpButton selectItemWithTag:_searchTarget];
+
+	if(self.workspaceFolders.count)
+	{
+		NSMenuItem* rootMenuItem = [whereMenu addItemWithTitle:@"Workspace Folder" action:nil keyEquivalent:@""];
+		NSMenu* rootMenu = [[NSMenu alloc] initWithTitle:rootMenuItem.title];
+		rootMenuItem.submenu = rootMenu;
+		for(NSDictionary* folder in self.workspaceFolders)
+		{
+			NSMenuItem* item = [rootMenu addItemWithTitle:folder[@"name"] action:@selector(orderFrontFindPanel:) keyEquivalent:@""];
+			item.target = self;
+			item.representedObject = folder[@"path"];
+			item.toolTip = folder[@"path"];
+		}
+	}
 
 	// =================
 	// = Recent Places =
@@ -699,7 +715,7 @@ static NSButton* OakCreateHistoryButton (NSString* toolTip)
 - (NSString*)searchFolder
 {
 	if(_searchTarget == FFSearchTargetProject)
-		return self.projectFolder;
+		return self.workspaceFolders ? nil : self.projectFolder;
 	else if(_searchTarget == FFSearchTargetFileBrowserItems && _fileBrowserItems.count == 1)
 		return _fileBrowserItems.firstObject;
 	else if(_searchTarget == FFSearchTargetOther)
@@ -917,7 +933,7 @@ static NSButton* OakCreateHistoryButton (NSString* toolTip)
 				{
 					NSArray* paths;
 					if(searchTarget == FFSearchTargetProject)
-						paths = @[ self.projectFolder ];
+						paths = self.workspaceFolders ? [self.workspaceFolders valueForKey:@"path"] : @[ self.projectFolder ];
 					else if(searchTarget == FFSearchTargetFileBrowserItems)
 						paths = self.fileBrowserItems;
 					else // searchTarget == FFSearchTargetOther

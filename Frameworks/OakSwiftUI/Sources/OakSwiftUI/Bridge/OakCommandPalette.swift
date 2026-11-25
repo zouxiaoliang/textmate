@@ -18,6 +18,7 @@ private class KeyablePanel: NSPanel {
 	private var panel: KeyablePanel?
 	private var viewModel: CommandPaletteViewModel?
 	private var cancellables = Set<AnyCancellable>()
+	private var onClose: (() -> Void)?
 
 	@objc public init(theme: OakThemeEnvironment) {
 		self.theme = theme
@@ -62,17 +63,35 @@ private class KeyablePanel: NSPanel {
 		vm.onItemRemoved = onRemove
 		vm.onItemsSelected = { [weak self] items in
 			guard let self else { return }
-			self.finishSelection()
-			onOpen(items)
+			self.finishSelection { onOpen(items) }
 		}
 		present(in: parentWindow, model: vm)
 	}
 
-	private func finishSelection() {
+	@objc public func showSearch(in parentWindow: NSWindow, label: String, placeholder: String,
+	                             query: String, scopes: [String], scope: Int,
+	                             onChange: @escaping (String, Int) -> Void,
+	                             onSelect: @escaping (OakCommandPaletteItem) -> Void,
+	                             onClose: @escaping () -> Void) {
+		let vm = CommandPaletteViewModel(label: label, placeholder: placeholder) { _ in [] }
+		vm.configureSearch(query: query, scopes: scopes, scope: scope, onChange: onChange)
+		present(in: parentWindow, model: vm, onSelect: onSelect)
+		self.onClose = onClose
+	}
+
+	@objc public func setSearchResults(_ items: [OakCommandPaletteItem], searching: Bool) {
+		viewModel?.setSearchResults(items, searching: searching)
+	}
+
+	private func finishSelection(then action: () -> Void) {
 		let parent = parentWindow
+		let cleanup = onClose
+		onClose = nil
+		defer { cleanup?() }
 		dismissWithoutNotify()
 		// Re-focus the parent before running responder chain actions.
 		parent?.makeKeyAndOrderFront(nil)
+		action()
 	}
 
 	private func present(in parentWindow: NSWindow?, model vm: CommandPaletteViewModel, onSelect: ((OakCommandPaletteItem) -> Void)? = nil) {
@@ -81,8 +100,7 @@ private class KeyablePanel: NSPanel {
 		if let onSelect {
 			vm.onItemSelected = { [weak self] item in
 				guard let self else { return }
-				self.finishSelection()
-				onSelect(item)
+				self.finishSelection { onSelect(item) }
 			}
 		}
 		vm.onDismiss = { [weak self] in
@@ -155,6 +173,9 @@ private class KeyablePanel: NSPanel {
 		panel = nil
 		viewModel = nil
 		cancellables.removeAll()
+		let cleanup = onClose
+		onClose = nil
+		cleanup?()
 	}
 
 	@objc public func dismiss() {

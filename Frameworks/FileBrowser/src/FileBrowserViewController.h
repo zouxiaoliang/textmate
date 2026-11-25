@@ -3,9 +3,11 @@
 @class FileBrowserViewController;
 @class FileItem;
 
-@protocol FileBrowserDelegate
+@protocol FileBrowserDelegate <NSObject>
 - (void)fileBrowser:(FileBrowserViewController*)fileBrowser openURLs:(NSArray*)someURLs;
 - (void)fileBrowser:(FileBrowserViewController*)fileBrowser closeURL:(NSURL*)anURL;
+@optional
+- (void)fileBrowserDidChangeWorkspaceState:(FileBrowserViewController*)fileBrowser;
 @end
 
 @interface FileBrowserViewController : NSViewController
@@ -15,6 +17,8 @@
 @property (nonatomic, readonly) NSString*        path; // Returns self.URL.filePathURL.path
 @property (nonatomic, readonly) NSURL*           directoryURLForNewItems;
 @property (nonatomic, readonly) NSArray<NSURL*>* selectedFileURLs;
+@property (nonatomic) NSString* workspaceActiveFolder;
+@property (nonatomic) NSString* workspaceFallbackFolder;
 
 @property (nonatomic, readonly) NSView*          headerView;
 @property (nonatomic, readonly) NSView*          actionsView;
@@ -22,6 +26,8 @@
 @property (nonatomic, readonly) id               sessionState;
 
 - (void)setupViewWithState:(id)state;
+- (void)configureWorkspaceWithName:(NSString*)name folders:(NSArray<NSDictionary<NSString*, NSString*>*>*)folders;
+- (void)showWorkspaceFolders:(id)sender;
 - (std::map<std::string, std::string>)variables;
 
 - (void)goToURL:(NSURL*)url;

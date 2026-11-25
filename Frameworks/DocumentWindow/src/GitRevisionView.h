@@ -1,12 +1,14 @@
 #import <Cocoa/Cocoa.h>
 
+@class GitEditorTheme;
+
 typedef NS_ENUM(NSInteger, GitStashAction) {
 	GitStashApply, GitStashDelete, GitStashDiffTool,
 };
 
 @interface GitRevisionView : NSView
 @property (nonatomic) BOOL softWrap;
-@property (nonatomic, copy) NSString* syntaxThemeUUID;
+@property (nonatomic) GitEditorTheme* editorTheme;
 @property (nonatomic, copy) void (^stashActionHandler)(GitStashAction action);
 @property (nonatomic, copy) void (^showFileHistory)(NSString* path);
 @property (nonatomic, copy) void (^restoreFile)(NSString* root, NSString* revision, NSString* path);

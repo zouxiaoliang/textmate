@@ -35,3 +35,4 @@ struct MBMenuItem
 
 NSMenu* MBCreateMenu (MBMenu const& menu, NSMenu* existingMenu = nil);
 NSString* MBDumpMenu (NSMenu* menu);
+BOOL MBPerformRunMenuKeyEquivalent (NSMenu* menu, NSEvent* event);

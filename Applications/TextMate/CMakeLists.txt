@@ -50,18 +50,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 else()
   set(CS_GET_TASK_ALLOW "false")
 endif()
-configure_file(Info.plist ${CMAKE_CURRENT_BINARY_DIR}/Info.plist)
+set(_info_plist "${CMAKE_CURRENT_BINARY_DIR}/Info.plist")
+configure_file(Info.plist "${_info_plist}")
+if(NOT CMAKE_GENERATOR STREQUAL "Xcode")
+  target_sources(TextMate PRIVATE "${_info_plist}")
+  set_source_files_properties("${_info_plist}" PROPERTIES MACOSX_PACKAGE_LOCATION ".")
+  set_property(TARGET TextMate APPEND PROPERTY LINK_DEPENDS
+    "$<TARGET_BUNDLE_DIR:TextMate>/Contents/Info.plist")
+endif()
 
 # Expand ${YEAR} in InfoPlist.strings — overwrite source copy in bundle
 configure_file(
   resources/English.lproj/InfoPlist.strings
   ${CMAKE_CURRENT_BINARY_DIR}/English.lproj/InfoPlist.strings)
 add_custom_command(TARGET TextMate POST_BUILD
+  COMMAND /usr/bin/plutil -lint -s
+    "$<TARGET_BUNDLE_DIR:TextMate>/Contents/Info.plist"
   COMMAND ${CMAKE_COMMAND} -E copy
     "${CMAKE_CURRENT_BINARY_DIR}/English.lproj/InfoPlist.strings"
     "$<TARGET_BUNDLE_DIR:TextMate>/Contents/Resources/English.lproj/InfoPlist.strings")
 set_target_properties(TextMate PROPERTIES
-  MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist")
+  MACOSX_BUNDLE_INFO_PLIST "${_info_plist}")
 
 # The full TextMate bundles are optional; keep basic highlighting available on
 # first launch and offline. User-installed bundles are indexed before these.

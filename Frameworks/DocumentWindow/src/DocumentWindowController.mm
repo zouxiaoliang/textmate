@@ -18,6 +18,8 @@
 #import "DocumentWindowController.h"
 #import "EmptyWorkspaceView.h"
 #import "ProjectLayoutView.h"
+#import "ProjectWorkspace.h"
+#import "RunPanelController.h"
 #import "TerminalPanelViewController.h"
 #import "TerminalEnvironment.h"
 #import "SelectGrammarViewController.h"
@@ -59,6 +61,9 @@
 #import <ns/ns.h>
 #import <kvdb/kvdb.h>
 #import <crash/info.h>
+#if HAVE_OAK_SWIFTUI
+#import "OakSwiftUI-Swift.h"
+#endif
 
 
 static bool can_reach_host (char const* host)
@@ -112,9 +117,9 @@ struct workspace_shortcut_t
 	NSInteger tag = NSNotFound;
 };
 
-static NSArray<NSArray<NSString*>*>* workspace_shortcuts (std::initializer_list<workspace_shortcut_t> commands)
+static NSArray<EmptyWorkspaceCommandButton*>* workspace_command_buttons (std::initializer_list<workspace_shortcut_t> commands)
 {
-	NSMutableArray<NSArray<NSString*>*>* rows = [NSMutableArray array];
+	NSMutableArray<EmptyWorkspaceCommandButton*>* rows = [NSMutableArray array];
 	for(auto const& command : commands)
 	{
 		NSMenu* menu = [NSApp.mainMenu itemWithTitle:command.menu].submenu;
@@ -124,9 +129,7 @@ static NSArray<NSArray<NSString*>*>* workspace_shortcuts (std::initializer_list<
 		{
 			if(item.isAlternate || item.action != command.action || (command.tag != NSNotFound && item.tag != command.tag))
 				continue;
-			NSString* keys = shortcut_label(item);
-			if(keys.length)
-				[rows addObject:@[ command.label, keys ]];
+			[rows addObject:[[EmptyWorkspaceCommandButton alloc] initWithName:command.label shortcut:shortcut_label(item) menuItem:item]];
 			break;
 		}
 	}
@@ -137,6 +140,7 @@ typedef NS_OPTIONS(NSUInteger, SidebarSections) {
 	SidebarSectionProject = 1 << 0,
 	SidebarSectionOutline = 1 << 1,
 	SidebarSectionSourceControl = 1 << 2,
+	SidebarSectionRunAndDebug = 1 << 3,
 };
 
 typedef NS_ENUM(NSInteger, WorkspaceMode) { WorkspaceModeEditor, WorkspaceModeGit };
@@ -222,6 +226,10 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 	std::vector<std::string>               _documentScopeAttributes; // attr.os-version, attr.untitled / attr.rev-path + kSettingsScopeAttributesKey
 }
 @property (nonatomic) ProjectLayoutView*          layoutView;
+@property (nonatomic) RunPanelController*         runPanelController;
+@property (nonatomic) NSMutableDictionary<NSString*, NSArray<NSDictionary*>*>* debugBreakpoints;
+@property (nonatomic) NSString*                  debugExecutionPath;
+@property (nonatomic) NSUInteger                debugExecutionLine;
 @property (nonatomic) OutlineViewController*      outlineViewController;
 @property (nonatomic) TerminalPanelViewController* terminalPanelController;
 @property (nonatomic, copy) NSString*              terminalSubtitle; // the subtitle text this window last wrote for terminal attention, nil when none
@@ -262,6 +270,9 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 @property (nonatomic) NSMutableDictionary<NSUUID*, NSString*>* tabTitles;
 @property (nonatomic) OakDocumentView*            documentView;
 @property (nonatomic) EmptyWorkspaceView*         emptyStateView;
+#if HAVE_OAK_SWIFTUI
+@property (nonatomic) OakCommandPalette*          openQuicklyPalette;
+#endif
 @property (nonatomic) OakTextView*                textView;
 @property (nonatomic) FileBrowserViewController*  fileBrowser;
 
@@ -275,6 +286,8 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 @property (nonatomic) NSSegmentedControl*         previousNextTouchBarControl;
 
 @property (nonatomic) NSString*                   projectPath;
+@property (nonatomic) ProjectWorkspace*           projectWorkspace;
+@property (nonatomic) NSString*                   workspaceFallbackFolder;
 
 @property (nonatomic) NSString*                   documentPath;
 
@@ -291,6 +304,10 @@ static void show_command_error (std::string const& message, oak::uuid_t const& u
 + (void)scheduleSessionBackup:(id)sender;
 
 - (void)makeTextViewFirstResponder:(id)sender;
+- (void)setRunPanelVisible:(BOOL)visible;
+- (void)updateWorkspaceContext;
+- (NSString*)gitWorkspaceDirectory;
+- (void)setupControllerForProject:(NSDictionary*)project skipMissingFiles:(BOOL)skipMissing workspace:(ProjectWorkspace*)workspace;
 
 - (void)fileBrowser:(FileBrowserViewController*)fileBrowser openURLs:(NSArray*)someURLs;
 - (void)fileBrowser:(FileBrowserViewController*)fileBrowser closeURL:(NSURL*)anURL;
@@ -703,6 +720,9 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.terminalPanelController.terminalDirectoryProvider = ^{
 			return terminalOwner.terminalStartDirectory ?: NSHomeDirectory();
 		};
+		self.terminalPanelController.floatingPanelDismissed = ^{
+			[[terminalOwner class] scheduleSessionBackup:terminalOwner];
+		};
 		self.terminalPanelController.lastSessionClosedHandler = ^{
 			// Deferred: this fires from inside the session teardown.
 			dispatch_async(dispatch_get_main_queue(), ^{
@@ -908,6 +928,9 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)windowWillClose:(NSNotification*)aNotification
 {
+#if HAVE_OAK_SWIFTUI
+	[self.openQuicklyPalette dismiss];
+#endif
 	self.sidebarCollapseToken = nil;
 	[self.sidebarTransitionTimer invalidate];
 	self.sidebarTransitionTimer = nil;
@@ -921,6 +944,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.gitWorkspaceController = nil;
 	[self.gitChangeController close];
 	self.gitChangeController = nil;
+	[self.runPanelController invalidate];
 	[self.terminalPanelController stopTerminal];
 	if((([self.window styleMask] & NSWindowStyleMaskFullScreen) != NSWindowStyleMaskFullScreen) && !self.window.isZoomed)
 		[NSUserDefaults.standardUserDefaults setObject:NSStringFromRect([self windowFrame]) forKey:@"DocumentControllerWindowFrame"];
@@ -945,11 +969,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(_documents.count == 0)
 		[self updateWindowTitle];
 	[self.window makeKeyAndOrderFront:sender];
+	[self.terminalPanelController refreshFloatingPanelVisibility];
 }
 
 - (void)updateEmptyStateShortcuts
 {
-	NSArray* files = workspace_shortcuts({
+	NSArray* files = workspace_command_buttons({
 		{ @"File", @"Open…", @selector(openDocument:) },
 		{ @"File", @"Open Quickly…", @selector(goToFile:) },
 		{ @"File", @"Open Recent Project…", @selector(openFavorites:) },
@@ -957,7 +982,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		{ @"File", @"New Document", @selector(newDocument:) },
 		{ @"File", @"New Tab", @selector(newDocumentInTab:) },
 	});
-	NSArray* tools = workspace_shortcuts({
+	NSArray* tools = workspace_command_buttons({
 		{ @"Navigate", @"Command Palette…", @selector(showCommandPalette:) },
 		{ @"View", @"File Browser", @selector(toggleFileBrowser:) },
 		{ @"View", @"Outline", @selector(toggleOutline:) },
@@ -965,7 +990,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		{ @"Bundles", @"Select Bundle Item…", @selector(showBundleItemChooser:) },
 		{ @"TextMate", @"Preferences…", @selector(showPreferences:) },
 	});
-	[self.emptyStateView setFileShortcuts:files toolShortcuts:tools];
+	[self.emptyStateView setFileCommands:files toolCommands:tools];
 }
 
 - (void)makeTextViewFirstResponder:(id)sender { if(self.workspaceMode == WorkspaceModeEditor) [self.window makeFirstResponder:self.textView]; }
@@ -1131,7 +1156,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 // Closing the window outright would end its running shells without asking.
 - (BOOL)keepsWindowWithoutDocuments
 {
-	return self.fileBrowserVisible || self.sourceControlVisible || self.terminalPanelController.terminalSessionIdentifiers.count;
+	return self.projectWorkspace || self.fileBrowserVisible || self.sourceControlVisible || self.terminalPanelController.terminalSessionIdentifiers.count;
 }
 
 - (void)closeTabsAtIndexes:(NSIndexSet*)anIndexSet askToSaveChanges:(BOOL)askToSaveFlag activate:(BOOL)activateFlag
@@ -1207,6 +1232,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.documents = @[];
 	self.selectedTabIndex = NSNotFound;
 	[_stickyDocumentIdentifiers removeAllObjects];
+	[self.runPanelController invalidate];
+	[self setRunPanelVisible:NO];
+	self.runPanelController = nil;
+	self.debugBreakpoints = nil;
+	self.debugExecutionPath = nil;
+	[self updateDebugGutter];
 	self.terminalPanelController.panelVisible = NO;
 	[self.terminalPanelController stopTerminal];
 }
@@ -1219,6 +1250,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	BOOL disableResize = self.disableFileBrowserWindowResize;
 	self.disableFileBrowserWindowResize = YES;
 	[self saveProjectState];
+	self.projectWorkspace = nil;
+	self.workspaceFallbackFolder = nil;
 	[self clearProjectContents];
 	self.defaultProjectPath = nil;
 	self.fileBrowserVisible = NO;
@@ -1258,7 +1291,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)performCloseProject:(id)sender
 {
-	if(self.projectPath || self.defaultProjectPath)
+	if(self.projectWorkspace || self.projectPath || self.defaultProjectPath)
 		[self confirmProjectCloseWithCompletionHandler:^{ [self closeProjectAfterConfirmation]; }];
 }
 
@@ -1316,7 +1349,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)saveProjectState
 {
-	if(self.defaultProjectPath || self.treatAsProjectWindow)
+	if(self.projectWorkspace)
+	{
+		NSDictionary* state = [self sessionInfoIncludingUntitledDocuments:NO];
+		[[self.class sharedProjectStateDB] setValue:state forKey:self.projectWorkspace.URL.path];
+	}
+	else if(self.defaultProjectPath || self.treatAsProjectWindow)
 		[self saveProjectStateForPath:self.defaultProjectPath ?: self.projectPath];
 }
 
@@ -1478,6 +1516,12 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	return NSTerminateLater;
 }
 
++ (void)stopAllRunSessions
+{
+	for(DocumentWindowController* controller in SortedControllers())
+		[controller.runPanelController invalidate];
+}
+
 + (NSApplicationTerminateReply)applicationShouldTerminateAfterTerminalCheck
 {
 	NSMutableArray<DocumentWindowController*>* controllers = [NSMutableArray array];
@@ -1560,7 +1604,9 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if([keyPath isEqualToString:@"selectedDocument.path"] || [keyPath isEqualToString:@"selectedDocument.displayName"])
 	{
 		self.documentPath = document.virtualPath ?: document.path;
-		if(!self.projectPath)
+		if(self.projectWorkspace)
+			[self updateWorkspaceContext];
+		else if(!self.projectPath)
 			self.projectPath = [document.path stringByDeletingLastPathComponent];
 	}
 
@@ -1568,6 +1614,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self updateWindowTitle];
 	if([keyPath isEqualToString:@"selectedDocument.documentEdited"])
 		self.window.documentEdited = document.isDocumentEdited;
+	if([keyPath isEqualToString:@"selectedDocument.path"] || [keyPath isEqualToString:@"selectedDocument.onDisk"] || [keyPath isEqualToString:@"selectedDocument.documentEdited"])
+		[self updateDebugGutter];
 	if([keyPath isEqualToString:@"selectedDocument.onDisk"] || [keyPath isEqualToString:@"selectedDocument.path"])
 		self.window.representedFilename = document.isOnDisk ? document.path : @"";
 	if([keyPath isEqualToString:@"selectedDocument.onDisk"] || [keyPath isEqualToString:@"selectedDocument.icon"])
@@ -2104,14 +2152,15 @@ static NSDictionary* ContextDocument(OakDocument* document)
 {
 	if(self.selectedDocument.displayName)
 	{
-		self.window.title = [self titleForDocument:self.selectedDocument withSetting:kSettingsWindowTitleKey];
+		NSString* title = [self titleForDocument:self.selectedDocument withSetting:kSettingsWindowTitleKey];
+		self.window.title = self.projectWorkspace ? [NSString stringWithFormat:@"%@ — %@", title, self.projectWorkspace.name] : title;
 	}
 	else
 	{
 		NSString* projectPath = self.defaultProjectPath ?: self.projectPath;
-		self.window.title = projectPath ? [NSFileManager.defaultManager displayNameAtPath:projectPath] : @"None";
+		self.window.title = self.projectWorkspace.name ?: (projectPath ? [NSFileManager.defaultManager displayNameAtPath:projectPath] : @"None");
 	}
-	[self.emptyStateView setProjectOpen:self.defaultProjectPath != nil || self.projectPath != nil];
+	[self.emptyStateView setProjectOpen:self.projectWorkspace != nil || self.defaultProjectPath != nil || self.projectPath != nil];
 	[self updateTabBarVisibility];
 }
 
@@ -2309,7 +2358,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(_projectPath != newProjectPath && ![_projectPath isEqualToString:newProjectPath])
 	{
 		_projectPath = newProjectPath;
-		NSString* gitDirectory = newProjectPath ?: self.terminalStartDirectory;
+		NSString* gitDirectory = self.gitWorkspaceDirectory;
 		self.sourceControlController.directory = gitDirectory;
 		self.gitWorkspaceController.directory = gitDirectory;
 		if(_projectSCMInfo = scm::info(to_s(_projectPath)))
@@ -2333,6 +2382,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self updateExternalAttributes];
 		[self updateWindowTitle];
 	}
+}
+
+- (NSString*)gitWorkspaceDirectory
+{
+	return self.projectWorkspace ? self.projectPath : self.projectPath ?: self.terminalStartDirectory;
 }
 
 - (void)setDocumentPath:(NSString*)newDocumentPath
@@ -2398,6 +2452,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)takeProjectPathFrom:(NSMenuItem*)aMenuItem
 {
+	if(self.projectWorkspace)
+		return;
 	if(NSString* path = [aMenuItem respondsToSelector:@selector(representedObject)] ? [aMenuItem representedObject] : nil)
 		self.projectPath = self.defaultProjectPath = path;
 }
@@ -2485,6 +2541,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		self.documentView.hidden = newDocument == nil;
 		self.documentView.document = _selectedDocument;
 		self.outlineViewController.document = _selectedDocument;
+		[self updateDebugGutter];
 		return;
 	}
 
@@ -2494,22 +2551,27 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	if(_selectedDocument = newDocument)
 	{
 		self.documentView.hidden = NO;
-		NSString* projectPath = self.defaultProjectPath ?: self.fileBrowser.path ?: [newDocument.path stringByDeletingLastPathComponent];
-		if(projectPath)
+		if(self.projectWorkspace)
+			[self updateWorkspaceContext];
+		else
 		{
-			std::map<std::string, std::string> const map = { { "projectDirectory", to_s(projectPath) } };
-			settings_t const settings = settings_for_path(NULL_STR, scope::scope_t(), to_s(projectPath), map);
-			std::string const userProjectDirectory = settings.get(kSettingsProjectDirectoryKey, NULL_STR);
-			if(path::is_absolute(userProjectDirectory))
-				projectPath = [NSString stringWithCxxString:path::normalize(userProjectDirectory)];
-		}
-		else if(NSString* urlString = [NSUserDefaults.standardUserDefaults stringForKey:kUserDefaultsInitialFileBrowserURLKey])
-		{
-			if(NSURL* url = [NSURL URLWithString:urlString])
-				projectPath = [[url filePathURL] path];
-		}
+			NSString* projectPath = self.defaultProjectPath ?: self.fileBrowser.path ?: [newDocument.path stringByDeletingLastPathComponent];
+			if(projectPath)
+			{
+				std::map<std::string, std::string> const map = { { "projectDirectory", to_s(projectPath) } };
+				settings_t const settings = settings_for_path(NULL_STR, scope::scope_t(), to_s(projectPath), map);
+				std::string const userProjectDirectory = settings.get(kSettingsProjectDirectoryKey, NULL_STR);
+				if(path::is_absolute(userProjectDirectory))
+					projectPath = [NSString stringWithCxxString:path::normalize(userProjectDirectory)];
+			}
+			else if(NSString* urlString = [NSUserDefaults.standardUserDefaults stringForKey:kUserDefaultsInitialFileBrowserURLKey])
+			{
+				if(NSURL* url = [NSURL URLWithString:urlString])
+					projectPath = [[url filePathURL] path];
+			}
 
-		self.projectPath = projectPath;
+			self.projectPath = projectPath;
+		}
 
 		self.documentView.document = _selectedDocument;
 		self.outlineViewController.document = _selectedDocument;
@@ -2517,13 +2579,17 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 	else
 	{
-		self.projectPath = self.defaultProjectPath ?: (self.fileBrowserVisible ? self.fileBrowser.path : self.sourceControlVisible ? self.projectPath : nil);
+		if(self.projectWorkspace)
+			[self updateWorkspaceContext];
+		else
+			self.projectPath = self.defaultProjectPath ?: (self.fileBrowserVisible ? self.fileBrowser.path : self.sourceControlVisible ? self.projectPath : nil);
 		self.documentView.document = nil;
 		self.documentView.hidden = YES;
 		self.outlineViewController.document = nil;
 		if(self.window.firstResponder == self.textView)
 			[self.window makeFirstResponder:self.fileBrowserVisible ? self.fileBrowser.outlineView : nil];
 	}
+	[self updateDebugGutter];
 	[self updateGitSoftWrap];
 	[self navigationHistoryDidChange:nil];
 }
@@ -2868,13 +2934,18 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[self closeTabsAtIndexes:indexSet askToSaveChanges:YES activate:NO];
 }
 
+- (void)fileBrowserDidChangeWorkspaceState:(FileBrowserViewController*)fileBrowser
+{
+	[[self class] scheduleSessionBackup:self];
+}
+
 - (void)setFileBrowserVisible:(BOOL)makeVisibleFlag
 {
 	if(makeVisibleFlag || _fileBrowserVisible)
 		[self cancelSidebarCollapse];
 	if(_fileBrowserVisible != makeVisibleFlag)
 	{
-		BOOL updateWindow = !self.outlineVisible && !self.sourceControlVisible && !self.disableFileBrowserWindowResize;
+		BOOL updateWindow = !self.outlineVisible && !self.sourceControlVisible && !self.layoutView.runAndDebugView && !self.disableFileBrowserWindowResize;
 		NSRect target = updateWindow && makeVisibleFlag ? [self frameForOpeningSidebar] : NSZeroRect;
 		_fileBrowserVisible = makeVisibleFlag;
 		if(makeVisibleFlag)
@@ -2883,9 +2954,17 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		{
 			self.fileBrowser = [[FileBrowserViewController alloc] init];
 			self.fileBrowser.delegate = self;
+			if(self.projectWorkspace)
+			{
+				[self.fileBrowser configureWorkspaceWithName:self.projectWorkspace.name folders:self.projectWorkspace.folders];
+				self.fileBrowser.workspaceActiveFolder = self.projectPath;
+				self.fileBrowser.workspaceFallbackFolder = self.workspaceFallbackFolder;
+			}
 			[self.fileBrowser setupViewWithState:_fileBrowserHistory];
 			[self updateChromeTheme];
-			if(!_fileBrowserHistory)
+			if(self.projectWorkspace && !self.fileBrowser.URL)
+				[self.fileBrowser showWorkspaceFolders:self];
+			else if(!_fileBrowserHistory)
 			{
 				if(NSString* path = self.projectPath ?: self.defaultProjectPath)
 					[self.fileBrowser goToURL:[NSURL fileURLWithPath:path]];
@@ -2920,7 +2999,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 {
 	if(_sourceControlVisible == visible) return;
 	[self cancelSidebarCollapse];
-	BOOL updateWindow = !self.fileBrowserVisible && !self.outlineVisible && !self.disableFileBrowserWindowResize;
+	BOOL updateWindow = !self.fileBrowserVisible && !self.outlineVisible && !self.layoutView.runAndDebugView && !self.disableFileBrowserWindowResize;
 	NSRect target = updateWindow && visible ? [self frameForOpeningSidebar] : NSZeroRect;
 	_sourceControlVisible = visible;
 	if(visible)
@@ -2943,7 +3022,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			self.sourceControlController.repositoryDidChange = ^{ [weakSelf.gitWorkspaceController refresh:nil]; };
 			self.sourceControlController.themeBackgroundColor = self.layoutView.sidebarThemeBackgroundColor;
 		}
-		self.sourceControlController.directory = self.projectPath ?: self.terminalStartDirectory;
+		self.sourceControlController.directory = self.gitWorkspaceDirectory;
 	}
 	else if([self.window.firstResponder isKindOfClass:NSView.class] && [(NSView*)self.window.firstResponder isDescendantOf:self.sourceControlController.view])
 		[self makeTextViewFirstResponder:self];
@@ -2967,7 +3046,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 	if(self.sourceControlVisible && !self.layoutView.sourceControlCollapsed)
 	{
-		if(!self.fileBrowserVisible && !self.outlineVisible) [self toggleSidebar:sender];
+		if(self.visibleSidebarSections == SidebarSectionSourceControl) [self toggleSidebar:sender];
 		else self.sourceControlVisible = NO;
 	}
 	else
@@ -2984,7 +3063,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self cancelSidebarCollapse];
 	if(_outlineVisible != makeVisibleFlag)
 	{
-		BOOL updateWindow = !self.fileBrowserVisible && !self.sourceControlVisible && !self.disableFileBrowserWindowResize;
+		BOOL updateWindow = !self.fileBrowserVisible && !self.sourceControlVisible && !self.layoutView.runAndDebugView && !self.disableFileBrowserWindowResize;
 		NSRect target = updateWindow && makeVisibleFlag ? [self frameForOpeningSidebar] : NSZeroRect;
 		_outlineVisible = makeVisibleFlag;
 		if(makeVisibleFlag)
@@ -3005,7 +3084,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)toggleOutline:(id)sender
 {
-	if(self.outlineVisible && !self.fileBrowserVisible && !self.sourceControlVisible)
+	if(self.visibleSidebarSections == SidebarSectionOutline)
 		[self toggleSidebar:sender];
 	else
 		self.outlineVisible = !self.outlineVisible;
@@ -3013,7 +3092,10 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (SidebarSections)visibleSidebarSections
 {
-	return (self.fileBrowserVisible ? SidebarSectionProject : 0) | (self.outlineVisible ? SidebarSectionOutline : 0) | (self.sourceControlVisible ? SidebarSectionSourceControl : 0);
+	return (self.fileBrowserVisible ? SidebarSectionProject : 0) |
+	       (self.outlineVisible ? SidebarSectionOutline : 0) |
+	       (self.sourceControlVisible ? SidebarSectionSourceControl : 0) |
+	       (self.layoutView.runAndDebugView ? SidebarSectionRunAndDebug : 0);
 }
 
 - (void)updateSidebarButton
@@ -3044,6 +3126,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.fileBrowserVisible = (sections & SidebarSectionProject) != 0;
 	self.sourceControlVisible = (sections & SidebarSectionSourceControl) != 0;
 	self.outlineVisible = (sections & SidebarSectionOutline) != 0;
+	if(sections & SidebarSectionRunAndDebug)
+	{
+		[self setRunPanelVisible:YES];
+		[self.runPanelController refresh:nil];
+	}
 	self.disableFileBrowserWindowResize = disableResize;
 	[self updateWindowForSidebarVisibility:YES openingFrame:target];
 }
@@ -3141,6 +3228,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	self.fileBrowserVisible = NO;
 	self.sourceControlVisible = NO;
 	self.outlineVisible = NO;
+	[self setRunPanelVisible:NO];
 	self.disableFileBrowserWindowResize = disableResize;
 	[self updateWindowForSidebarVisibility:NO openingFrame:NSZeroRect];
 }
@@ -3195,27 +3283,55 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 }
 
+static theme_ptr ResolveEditorTheme (OakTextView* textView, NSString** themeUUID = nullptr)
+{
+	theme_ptr theme = textView.theme;
+	NSString* uuid = theme ? textView.themeUUID : textView.effectiveThemeUUID;
+	if(!theme)
+	{
+		if(auto item = bundles::lookup(to_s(uuid)))
+			theme = parse_theme(item);
+	}
+	if(themeUUID)
+		*themeUUID = uuid;
+	return theme;
+}
+
 - (void)updateChromeTheme
 {
-	self.gitWorkspaceController.syntaxThemeUUID = self.textView.themeUUID;
-	if(theme_ptr theme = self.textView.theme)
-	{
-		NSColor* sidebarBackground = [NSColor colorWithCGColor:theme->gutter_styles().background];
-		self.layoutView.sidebarThemeBackgroundColor = sidebarBackground;
-		self.layoutView.sidebarThemeIsDark = theme->is_dark();
-		[self.outlineViewController setThemeBackgroundColor:sidebarBackground];
-		self.fileBrowser.outlineView.backgroundColor = sidebarBackground;
-		self.sourceControlController.themeBackgroundColor = sidebarBackground;
+	NSString* themeUUID;
+	theme_ptr theme = ResolveEditorTheme(self.textView, &themeUUID);
 
-		// The content bleeds under the transparent title bar, so use the
-		// document background there while keeping the sidebar slightly distinct.
-		if(self.selectedDocument.fileType)
-		{
-			NSColor* background = [NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))];
-			self.window.backgroundColor = background;
-			self.tabBarView.titleBarBackgroundColor = background;
-		}
+	GitEditorTheme* palette = [GitEditorTheme new];
+	BOOL dark = theme ? theme->is_dark() : OakThemeAppearanceIsDark(self.textView.effectiveAppearance);
+	if(theme)
+	{
+		NSString* fileType = self.selectedDocument.fileType;
+		CGColorRef foreground = fileType.length ? theme->styles_for_scope(to_s(fileType)).foreground() : theme->foreground();
+		palette.background = [NSColor colorWithCGColor:theme->background(fileType.length ? to_s(fileType) : NULL_STR)];
+		palette.foreground = [NSColor colorWithCGColor:foreground ?: theme->foreground()];
+		palette.gutterBackground = [NSColor colorWithCGColor:theme->gutter_styles().background];
+		palette.gutterForeground = [NSColor colorWithCGColor:theme->gutter_styles().foreground];
+		palette.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+		palette.syntaxThemeUUID = themeUUID;
 	}
+	else
+	{
+		palette.background = NSColor.windowBackgroundColor;
+		palette.foreground = NSColor.textColor;
+		palette.gutterBackground = NSColor.controlBackgroundColor;
+		palette.gutterForeground = NSColor.secondaryLabelColor;
+	}
+
+	self.window.backgroundColor = self.tabBarView.titleBarBackgroundColor = palette.background;
+	self.emptyStateView.backgroundColor = palette.background;
+	self.emptyStateView.appearance = palette.appearance;
+	self.layoutView.sidebarThemeBackgroundColor = palette.gutterBackground;
+	self.layoutView.sidebarThemeIsDark = dark;
+	[self.outlineViewController setThemeBackgroundColor:palette.gutterBackground];
+	self.fileBrowser.outlineView.backgroundColor = palette.gutterBackground;
+	self.sourceControlController.themeBackgroundColor = palette.gutterBackground;
+	self.gitWorkspaceController.editorTheme = palette;
 }
 
 - (void)updateTerminalTheme
@@ -3226,20 +3342,21 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	// fontWithDescriptor:size: is nullable, and the Swift side takes a non-optional font.
 	if(NSFont* terminalFont = font ? [NSFont fontWithDescriptor:font.fontDescriptor size:font.pointSize * self.textView.fontScaleFactor] : nil)
 		[self.terminalPanelController applyTerminalFont:terminalFont];
-	if(!self.selectedDocument.fileType) // styles_for_scope ASSERTs on an empty scope
-		return;
-	if(theme_ptr theme = self.textView.theme)
+	if(theme_ptr theme = ResolveEditorTheme(self.textView))
 	{
-		auto const& styles = theme->styles_for_scope(scope::scope_t(to_s(self.selectedDocument.fileType)));
-		NSColor* foreground = [NSColor colorWithCGColor:styles.foreground() ?: theme->foreground()];
+		NSString* fileType = self.selectedDocument.fileType;
+		std::string const fileScope = fileType.length ? to_s(fileType) : "";
+		auto const& styles = theme->styles_for_scope(fileScope.empty() ? "meta.terminal" : fileScope);
+		CGColorRef textColor = fileScope.empty() ? theme->foreground() : styles.foreground();
+		NSColor* foreground = [NSColor colorWithCGColor:textColor ?: theme->foreground()];
 		// ANSI red, green, yellow, blue, magenta, cyan borrow common syntax roles.
 		NSMutableArray<NSColor*>* syntaxColors = [NSMutableArray array];
 		for(char const* syntaxScope : { "invalid", "string", "constant.numeric", "entity.name.function", "keyword", "support.type" })
 		{
-			auto const& syntax = theme->styles_for_scope(scope::scope_t(to_s(self.selectedDocument.fileType) + " " + syntaxScope));
+			auto const& syntax = theme->styles_for_scope(fileScope.empty() ? syntaxScope : fileScope + " " + syntaxScope);
 			[syntaxColors addObject:syntax.foreground() ? [NSColor colorWithCGColor:syntax.foreground()] : foreground];
 		}
-		[self.terminalPanelController applyTerminalBackground:[NSColor colorWithCGColor:theme->background(to_s(self.selectedDocument.fileType))]
+		[self.terminalPanelController applyTerminalBackground:[NSColor colorWithCGColor:theme->background(fileScope.empty() ? NULL_STR : fileScope)]
 			foreground:foreground
 			caret:styles.caret() ? [NSColor colorWithCGColor:styles.caret()] : foreground
 			selection:styles.selection() ? [NSColor colorWithCGColor:styles.selection()] : NSColor.selectedTextBackgroundColor
@@ -3249,32 +3366,40 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (NSString*)terminalStartDirectory
 {
+	if(self.projectWorkspace)
+		return self.projectPath ?: self.projectWorkspace.URL.URLByDeletingLastPathComponent.path;
 	// An explicitly opened project takes precedence over an older inferred document/startup folder.
 	return self.defaultProjectPath ?: self.projectPath ?: self.fileBrowser.path ?: [self.selectedDocument.path stringByDeletingLastPathComponent];
 }
 
 - (IBAction)toggleTerminalPanel:(id)sender
 {
+	TerminalPanelViewController* terminal = self.terminalPanelController;
 	if(self.workspaceMode == WorkspaceModeGit)
 	{
 		self.workspaceMode = WorkspaceModeEditor;
-		if(self.terminalPanelController.panelVisible)
+		if(terminal.panelVisible)
 		{
-			[self.terminalPanelController focusTerminal];
+			[terminal focusTerminal];
 			return;
 		}
 	}
+	if(terminal.isPanelTucked)
+	{
+		[terminal focusTerminal];
+		return;
+	}
 	NSResponder* responder = self.window.firstResponder;
-	if(self.terminalPanelController.panelVisible && [responder isKindOfClass:NSView.class] &&
-	   [(NSView*)responder isDescendantOf:self.terminalPanelController.view] &&
+	if(terminal.panelVisible && [responder isKindOfClass:NSView.class] &&
+	   [(NSView*)responder isDescendantOf:terminal.view] &&
 	   ![(NSView*)responder isDescendantOf:self.layoutView])
 		[self.window makeFirstResponder:self.textView];
-	self.terminalPanelController.panelVisible = !self.terminalPanelController.panelVisible;
-	if(self.terminalPanelController.panelVisible)
+	terminal.panelVisible = !terminal.panelVisible;
+	if(terminal.panelVisible)
 	{
-		[self.terminalPanelController startTerminal];
+		[terminal startTerminal];
 		[self updateTerminalTheme];
-		[self.terminalPanelController focusTerminal];
+		[terminal focusTerminal];
 	}
 	[[self class] scheduleSessionBackup:self];
 }
@@ -3366,7 +3491,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 	if(!self.gitWorkspaceController) {
 		self.gitWorkspaceController = [[GitWorkspaceViewController alloc] init];
-		self.gitWorkspaceController.syntaxThemeUUID = self.textView.themeUUID;
+		[self updateChromeTheme];
 		__weak DocumentWindowController* weakSelf = self;
 		self.gitWorkspaceController.bufferProvider = ^NSDictionary*{ return [weakSelf captureProjectChangesBuffers]; };
 		self.gitWorkspaceController.repositoryDidChange = ^{ [weakSelf.sourceControlController refresh:nil]; };
@@ -3381,7 +3506,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 			[workspace.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
 		]];
 	}
-	self.gitWorkspaceController.directory = self.projectPath ?: self.terminalStartDirectory;
+	self.gitWorkspaceController.directory = self.gitWorkspaceDirectory;
 	[self updateGitSoftWrap];
 	editor.hidden = YES;
 	self.gitWorkspaceController.view.hidden = NO;
@@ -3396,13 +3521,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 {
 	if(!self.projectChangesController) {
 		__weak DocumentWindowController* weakSelf = self;
-		self.projectChangesController = [[ProjectChangesWindowController alloc] initWithDirectory:self.projectPath ?: self.terminalStartDirectory buffers:^NSDictionary*{
+		self.projectChangesController = [[ProjectChangesWindowController alloc] initWithDirectory:self.gitWorkspaceDirectory buffers:^NSDictionary*{
 			return [weakSelf captureProjectChangesBuffers];
 		} openFile:^(NSString* path, NSUInteger line){
 			[weakSelf openItems:@[@{ @"path": path, @"selectionString": [NSString stringWithFormat:@"%lu:1", (unsigned long)line] }] closingOtherTabs:NO activate:YES];
 		}];
 	}
-	self.projectChangesController.directory = self.projectPath ?: self.terminalStartDirectory;
+	self.projectChangesController.directory = self.gitWorkspaceDirectory;
 	[self.projectChangesController showWindow:sender];
 }
 
@@ -3415,7 +3540,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)toggleFileBrowser:(id)sender
 {
-	if(self.fileBrowserVisible && !self.outlineVisible && !self.sourceControlVisible)
+	if(self.visibleSidebarSections == SidebarSectionProject)
 		[self toggleSidebar:sender];
 	else
 		self.fileBrowserVisible = !self.fileBrowserVisible;
@@ -3432,7 +3557,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 - (void)revealSelectedFileInBrowser
 {
 	if(NSString* path = self.selectedDocument.path)
-		[self.fileBrowser selectURL:[NSURL fileURLWithPath:path] withParentURL:self.projectPath ? [NSURL fileURLWithPath:self.projectPath] : nil];
+	{
+		NSString* root = self.projectWorkspace ? [self.projectWorkspace folderContainingPath:path] : self.projectPath;
+		if(root || !self.projectWorkspace)
+			[self.fileBrowser selectURL:[NSURL fileURLWithPath:path] withParentURL:root ? [NSURL fileURLWithPath:root isDirectory:YES] : nil];
+	}
 }
 
 - (IBAction)revealFileInProject:(id)sender
@@ -3445,7 +3574,170 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[self revealSelectedFileInBrowser];
 	}
 }
-- (IBAction)goToProjectFolder:(id)sender    { self.fileBrowserVisible = YES; [self.fileBrowser goToURL:[NSURL fileURLWithPath:self.projectPath]]; }
+- (IBAction)goToProjectFolder:(id)sender
+{
+	self.fileBrowserVisible = YES;
+	if(self.projectWorkspace)
+		[self.fileBrowser showWorkspaceFolders:sender];
+	else if(self.projectPath)
+		[self.fileBrowser goToURL:[NSURL fileURLWithPath:self.projectPath]];
+}
+
+- (NSURL*)projectWorkspaceURL
+{
+	return self.projectWorkspace.URL;
+}
+
+- (void)updateWorkspaceContext
+{
+	ProjectWorkspace* workspace = self.projectWorkspace;
+	self.workspaceFallbackFolder = [workspace availableFolderPreferringPath:self.workspaceFallbackFolder];
+	NSString* documentFolder = [workspace folderContainingPath:self.selectedDocument.path];
+	self.projectPath = documentFolder ?: self.workspaceFallbackFolder;
+	self.fileBrowser.workspaceActiveFolder = self.projectPath;
+	self.fileBrowser.workspaceFallbackFolder = self.workspaceFallbackFolder;
+}
+
+- (void)refreshWorkspaceFolders
+{
+	[self.runPanelController resetTrust];
+	[self updateWorkspaceContext];
+	[self.fileBrowser configureWorkspaceWithName:self.projectWorkspace.name folders:self.projectWorkspace.folders];
+	[self.runPanelController refresh:self];
+	[self updateDebugGutter];
+	[self goToProjectFolder:self];
+	[self updateWindowTitle];
+	[[self class] scheduleSessionBackup:self];
+}
+
++ (BOOL)openWorkspaceAtURL:(NSURL*)url error:(NSError**)error
+{
+	ProjectWorkspace* workspace = [ProjectWorkspace workspaceAtURL:url error:error];
+	if(!workspace)
+		return NO;
+	for(DocumentWindowController* candidate in SortedControllers())
+	{
+		if([candidate.projectWorkspaceURL isEqual:workspace.URL])
+		{
+			[candidate goToProjectFolder:self];
+			[candidate bringToFront];
+			return YES;
+		}
+	}
+
+	NSMutableDictionary* state;
+	if(![NSUserDefaults.standardUserDefaults boolForKey:kUserDefaultsDisableFolderStateRestore])
+		state = [[[self sharedProjectStateDB] valueForKey:workspace.URL.path] mutableCopy];
+	if(!state)
+		state = [NSMutableDictionary dictionary];
+	state[@"workspacePath"] = workspace.URL.path;
+	state[@"fileBrowserVisible"] = @YES;
+	DocumentWindowController* controller = [self new];
+	[controller setupControllerForProject:state skipMissingFiles:YES workspace:workspace];
+	[controller bringToFront];
+	[NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:workspace.URL];
+	[self scheduleSessionBackup:controller];
+	return YES;
+}
+
+- (BOOL)createWorkspaceAtURL:(NSURL*)url error:(NSError**)error
+{
+	NSString* path = self.projectWorkspace ? nil : self.defaultProjectPath ?: self.projectPath;
+	BOOL isDirectory = NO;
+	NSArray* paths = path && [NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory ? @[ path ] : @[];
+	ProjectWorkspace* workspace = [ProjectWorkspace createAtURL:url folderPaths:paths error:error];
+	if(!workspace)
+		return NO;
+	if(self.projectWorkspace)
+		return [self.class openWorkspaceAtURL:workspace.URL error:error];
+
+	[self saveProjectState];
+	self.defaultProjectPath = nil;
+	self.fileBrowserHistory = nil;
+	self.projectWorkspace = workspace;
+	[self refreshWorkspaceFolders];
+	[self bringToFront];
+	[NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:workspace.URL];
+	return YES;
+}
+
+- (IBAction)addWorkspaceFolder:(id)sender
+{
+	if(!self.projectWorkspace)
+		return;
+	NSOpenPanel* panel = [NSOpenPanel openPanel];
+	panel.title = @"Add Folders to Workspace";
+	panel.prompt = @"Add";
+	panel.canChooseDirectories = YES;
+	panel.canChooseFiles = NO;
+	panel.allowsMultipleSelection = YES;
+	panel.directoryURL = [self.projectWorkspace.URL URLByDeletingLastPathComponent];
+	[panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response){
+		if(response == NSModalResponseOK)
+		{
+			NSError* error;
+			if([self.projectWorkspace addFolderPaths:[panel.URLs valueForKey:@"path"] error:&error])
+				[self refreshWorkspaceFolders];
+			else if(error)
+				[self.window presentError:error];
+		}
+	}];
+}
+
+- (IBAction)removeWorkspaceFolder:(id)sender
+{
+	NSArray* folders = self.projectWorkspace.folders;
+	if(!folders.count)
+		return;
+
+	NSAlert* alert = [NSAlert new];
+	alert.messageText = @"Remove Folder from Workspace";
+	alert.informativeText = @"The folder and its files stay on disk. Open tabs stay open.";
+	NSPopUpButton* choices = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 300, 26) pullsDown:NO];
+	choices.menu.autoenablesItems = NO;
+	for(NSDictionary* folder in folders)
+	{
+		NSString* title = [NSString stringWithFormat:@"%@ — %@", folder[@"name"], [folder[@"path"] stringByAbbreviatingWithTildeInPath]];
+		NSMenuItem* choice = [choices.menu addItemWithTitle:title action:nil keyEquivalent:@""];
+		choice.representedObject = folder[@"path"];
+	}
+	NSSet* selectedPaths = [NSSet setWithArray:[self.fileBrowser.selectedFileURLs valueForKey:@"path"] ?: @[]];
+	for(NSMenuItem* item in choices.itemArray)
+	{
+		if([item.representedObject isEqual:self.projectPath])
+			[choices selectItem:item];
+	}
+	for(NSMenuItem* item in choices.itemArray)
+	{
+		if([selectedPaths containsObject:item.representedObject])
+		{
+			[choices selectItem:item];
+			break;
+		}
+	}
+	alert.accessoryView = choices;
+	[alert addButtonWithTitle:@"Remove"];
+	[alert addButtonWithTitle:@"Cancel"];
+	[alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response){
+		if(response == NSAlertFirstButtonReturn)
+		{
+			NSError* error;
+			if([self.projectWorkspace removeFolderAtPath:choices.selectedItem.representedObject error:&error])
+				[self refreshWorkspaceFolders];
+			else if(error)
+				[self.window presentError:error];
+		}
+	}];
+}
+
+- (IBAction)takeWorkspaceFolderFrom:(id)sender
+{
+	if(!self.projectWorkspace || ![sender respondsToSelector:@selector(representedObject)])
+		return;
+	self.workspaceFallbackFolder = [sender representedObject];
+	[self updateWorkspaceContext];
+	[[self class] scheduleSessionBackup:self];
+}
 
 - (IBAction)goBack:(id)sender               { self.fileBrowserVisible = YES; [self.fileBrowser goBack:sender];               }
 - (IBAction)goForward:(id)sender            { self.fileBrowserVisible = YES; [self.fileBrowser goForward:sender];            }
@@ -3550,6 +3842,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	Find* find = Find.sharedInstance;
 	find.documentIdentifier = self.selectedDocumentUUID;
 	find.projectFolder      = self.projectPath ?: self.untitledSavePath ?: NSHomeDirectory();
+	find.workspaceFolders   = self.projectWorkspace.folders;
 	find.delegate           = self;
 
 	NSArray* items;
@@ -3557,7 +3850,7 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	{
 		items = [self.fileBrowser.selectedFileURLs valueForKey:@"path"];
 		if(items.count == 0)
-			items = @[ self.fileBrowser.path ?: find.projectFolder ];
+			items = self.fileBrowser.path ? @[ self.fileBrowser.path ] : self.projectWorkspace ? [self.projectWorkspace.folders valueForKey:@"path"] : @[ find.projectFolder ];
 	}
 	find.fileBrowserItems = items.count ? items : nil;
 
@@ -3582,6 +3875,11 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 		case FFSearchTargetProject:
 		{
+			if(self.projectWorkspace)
+			{
+				find.searchTarget = FFSearchTargetProject;
+				break;
+			}
 			// Only reset search target if the dialog is not already showing potential search results from “Other…”
 			if(!find.isVisible || !didOwnDialog || find.searchTarget == FFSearchTargetDocument || find.searchTarget == FFSearchTargetSelection)
 			{
@@ -3615,6 +3913,245 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	[runCommand showWindow:nil];
 }
 
+- (NSArray<NSDictionary<NSString*, NSString*>*>*)foldersForRun
+{
+	if(self.projectWorkspace)
+		return self.projectWorkspace.folders;
+	if(NSString* root = (self.defaultProjectPath ?: self.projectPath).stringByStandardizingPath.stringByResolvingSymlinksInPath)
+		return @[ @{ @"path": root, @"name": root.lastPathComponent.length ? root.lastPathComponent : root } ];
+	return @[];
+}
+
+- (BOOL)isProjectSourcePath:(NSString*)path
+{
+	if(!path.length)
+		return NO;
+	for(NSDictionary* folder in [self foldersForRun])
+	{
+		NSString* root = folder[@"path"];
+		if([root isEqual:@"/"] || [path hasPrefix:[root stringByAppendingString:@"/"]])
+			return YES;
+	}
+	return NO;
+}
+
+- (NSString*)breakpointPath
+{
+	OakDocument* document = self.selectedDocument;
+	NSString* path = document.path.stringByResolvingSymlinksInPath;
+	return document.isOnDisk && [path.pathExtension isEqual:@"go"] && [self isProjectSourcePath:path] ? path : nil;
+}
+
+- (void)updateDebugGutter
+{
+	NSString* path = [self breakpointPath];
+	NSArray* breakpoints = path ? self.debugBreakpoints[path] : nil;
+	NSMutableIndexSet* enabled = [NSMutableIndexSet indexSet];
+	NSMutableIndexSet* disabled = [NSMutableIndexSet indexSet];
+	NSMutableIndexSet* unverified = [NSMutableIndexSet indexSet];
+	for(NSDictionary* breakpoint in breakpoints)
+	{
+		NSUInteger line = [breakpoint[@"line"] unsignedIntegerValue];
+		if([breakpoint[@"enabled"] isEqual:@NO])
+			[disabled addIndex:line];
+		else if([self.runPanelController isBreakpointUnverifiedAtPath:path line:line])
+			[unverified addIndex:line];
+		else
+			[enabled addIndex:line];
+	}
+	NSString* source = self.selectedDocument.path.stringByResolvingSymlinksInPath;
+	NSUInteger executionLine = self.debugExecutionLine && [source isEqual:self.debugExecutionPath] ? self.debugExecutionLine - 1 : NSNotFound;
+	if(path && !self.selectedDocument.isDocumentEdited)
+	{
+		__weak DocumentWindowController* weakSelf = self;
+		self.documentView.toggleBreakpointAtLine = ^(NSUInteger line){ [weakSelf toggleBreakpointAtSourceLine:line]; };
+	}
+	else
+		self.documentView.toggleBreakpointAtLine = nil;
+	[self.documentView showDebugGutter:(path && (self.layoutView.runAndDebugView || breakpoints.count)) || executionLine != NSNotFound
+	                       breakpoints:enabled disabledBreakpoints:disabled unverifiedBreakpoints:unverified executionLine:executionLine];
+}
+
+- (void)updateBreakpointAtPath:(NSString*)path line:(NSUInteger)line with:(NSDictionary*)breakpoint
+{
+	if(!line || ![self isProjectSourcePath:path] || ![path.pathExtension isEqual:@"go"])
+		return;
+	self.debugBreakpoints = self.debugBreakpoints ?: [NSMutableDictionary dictionary];
+	NSMutableArray* entries = [self.debugBreakpoints[path] mutableCopy] ?: [NSMutableArray array];
+	NSUInteger index = [entries indexOfObjectPassingTest:^BOOL(NSDictionary* entry, NSUInteger index, BOOL* stop){
+		return [entry[@"line"] isEqual:@(line)];
+	}];
+	if(index != NSNotFound)
+		[entries removeObjectAtIndex:index];
+	if(breakpoint)
+	{
+		NSMutableDictionary* entry = [breakpoint mutableCopy];
+		entry[@"line"] = @(line);
+		[entries addObject:entry];
+		[entries sortUsingDescriptors:@[ [NSSortDescriptor sortDescriptorWithKey:@"line" ascending:YES] ]];
+	}
+	self.debugBreakpoints[path] = entries.count ? [entries copy] : nil;
+	[self.runPanelController setBreakpoints:entries forPath:path];
+	[self updateDebugGutter];
+}
+
+- (void)toggleBreakpointAtSourceLine:(NSUInteger)line
+{
+	NSString* path = [self breakpointPath];
+	if(!path || !line || self.selectedDocument.isDocumentEdited)
+	{
+		NSBeep();
+		return;
+	}
+	for(NSDictionary* breakpoint in self.debugBreakpoints[path])
+	{
+		if([breakpoint[@"line"] isEqual:@(line)])
+		{
+			[self updateBreakpointAtPath:path line:line with:nil];
+			return;
+		}
+	}
+	[self updateBreakpointAtPath:path line:line with:@{}];
+}
+
+- (IBAction)toggleProjectBreakpoint:(id)sender
+{
+	text::selection_t selection(to_s(self.textView.selectionString));
+	if(!selection.last().is_undefined())
+		[self toggleBreakpointAtSourceLine:selection.last().to.line + 1];
+}
+
+- (NSDictionary<NSString*, NSArray<NSDictionary*>*>*)breakpointsForDebugging
+{
+	NSMutableDictionary* valid = [NSMutableDictionary dictionary];
+	for(NSString* path in self.debugBreakpoints)
+	{
+		if([self isProjectSourcePath:path] && [NSFileManager.defaultManager fileExistsAtPath:path])
+			valid[path] = self.debugBreakpoints[path];
+	}
+	return valid;
+}
+
+- (void)showDebugFrameAtPath:(NSString*)path line:(NSUInteger)line executionLine:(BOOL)executionLine
+{
+	path = path.stringByResolvingSymlinksInPath;
+	NSNumber* regularFile = nil;
+	if(![[NSURL fileURLWithPath:path] getResourceValue:&regularFile forKey:NSURLIsRegularFileKey error:nil] || !regularFile.boolValue)
+		return;
+	if(executionLine)
+	{
+		self.debugExecutionPath = path;
+		self.debugExecutionLine = line;
+	}
+	self.workspaceMode = WorkspaceModeEditor;
+	[self openItems:@[ @{ @"path": path, @"selectionString": [NSString stringWithFormat:@"%lu:1", (unsigned long)line] } ]
+	   closingOtherTabs:NO activate:YES];
+	[self updateDebugGutter];
+}
+
+- (RunPanelController*)prepareRunPanel
+{
+	if(!self.runPanelController)
+	{
+		self.runPanelController = [RunPanelController new];
+		__weak DocumentWindowController* weakSelf = self;
+		self.runPanelController.foldersProvider = ^{ return [weakSelf foldersForRun] ?: @[]; };
+		self.runPanelController.fileProvider = ^{ return weakSelf.selectedDocument.path; };
+		self.runPanelController.breakpointsProvider = ^{ return [weakSelf breakpointsForDebugging] ?: @{}; };
+		self.runPanelController.updateBreakpoint = ^(NSString* path, NSUInteger line, NSDictionary* breakpoint){
+			[weakSelf updateBreakpointAtPath:path line:line with:breakpoint];
+		};
+		self.runPanelController.breakpointResultsDidChange = ^{ [weakSelf updateDebugGutter]; };
+		self.runPanelController.showFrame = ^(NSString* path, NSUInteger line, BOOL executionLine){
+			[weakSelf showDebugFrameAtPath:path line:line executionLine:executionLine];
+		};
+		self.runPanelController.clearExecutionLine = ^{
+			weakSelf.debugExecutionPath = nil;
+			[weakSelf updateDebugGutter];
+		};
+		self.runPanelController.openConfiguration = ^(NSURL* url){
+			[weakSelf openItems:@[ @{ @"path": url.path } ] closingOtherTabs:NO activate:YES];
+		};
+		self.runPanelController.hideHandler = ^{ [weakSelf setRunPanelVisible:NO]; };
+		self.runPanelController.showOutputHandler = ^{ [weakSelf showRunOutput:nil]; };
+		self.runPanelController.watchExpressionsDidChange = ^{ [[weakSelf class] scheduleSessionBackup:weakSelf]; };
+		[self.runPanelController attachDebugToolbarToView:self.layoutView aboveEditor:self.documentView];
+	}
+	return self.runPanelController;
+}
+
+- (void)setRunPanelVisible:(BOOL)visible
+{
+	NSView* oldSidebar = self.layoutView.runAndDebugView;
+	if(visible || oldSidebar)
+		[self cancelSidebarCollapse];
+	if(visible == (oldSidebar != nil))
+		return;
+	if(oldSidebar && [self.window.firstResponder isKindOfClass:NSView.class] &&
+	   [(NSView*)self.window.firstResponder isDescendantOf:oldSidebar])
+		[self makeTextViewFirstResponder:self];
+	if(visible)
+		self.sidebarSectionsToRestore = 0;
+	self.layoutView.runAndDebugView = visible ? [self prepareRunPanel].view : nil;
+	[self updateSidebarButton];
+	[self updateDebugGutter];
+	[[self class] scheduleSessionBackup:self];
+}
+
+- (IBAction)showRunOutput:(id)sender
+{
+	self.workspaceMode = WorkspaceModeEditor;
+	[[self prepareRunPanel] showOutputInWindow:self.window];
+}
+
+- (IBAction)showRunPanel:(id)sender
+{
+	self.workspaceMode = WorkspaceModeEditor;
+	[self setRunPanelVisible:YES];
+	self.layoutView.runAndDebugCollapsed = NO;
+	[self.runPanelController refresh:sender];
+}
+
+- (IBAction)runSelectedConfiguration:(id)sender
+{
+	self.workspaceMode = WorkspaceModeEditor;
+	[self setRunPanelVisible:YES];
+	self.layoutView.runAndDebugCollapsed = NO;
+	[self.runPanelController run:sender];
+}
+
+- (IBAction)configureRunPanel:(id)sender
+{
+	[self showRunPanel:sender];
+	[self.runPanelController configure:sender];
+}
+
+- (IBAction)stopRunConfiguration:(id)sender
+{
+	[self.runPanelController stop:sender];
+}
+
+- (IBAction)restartRunConfiguration:(id)sender
+{
+	self.workspaceMode = WorkspaceModeEditor;
+	[self.runPanelController restart:sender];
+}
+
+- (IBAction)debugSelectedConfiguration:(id)sender
+{
+	self.workspaceMode = WorkspaceModeEditor;
+	if(!self.runPanelController.isRunning)
+	{
+		[self setRunPanelVisible:YES];
+		self.layoutView.runAndDebugCollapsed = NO;
+	}
+	[self.runPanelController debug:sender];
+}
+
+- (IBAction)stepOverProjectDebugging:(id)sender { [self.runPanelController stepOver:sender]; }
+- (IBAction)stepIntoProjectDebugging:(id)sender { [self.runPanelController stepIn:sender]; }
+- (IBAction)stepOutOfProjectDebugging:(id)sender { [self.runPanelController stepOut:sender]; }
+
 // ================
 // = FindDelegate =
 // ================
@@ -3632,27 +4169,70 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (IBAction)goToFile:(id)sender
 {
-	FileChooser* fc = FileChooser.sharedInstance;
-
-	fc.path            = nil; // Disable potential work when updating filterString/currentDocument
-	fc.filterString    = @"";
-	fc.currentDocument = self.selectedDocumentUUID;
-	fc.target          = self;
-	fc.action          = @selector(fileChooserDidSelectItems:);
-	fc.path            = self.projectPath ?: self.untitledSavePath ?: NSHomeDirectory();
-
+	NSString* directory = self.projectPath ?: self.untitledSavePath ?: NSHomeDirectory();
+	NSString* query = @"";
 	if(OakPasteboardEntry* entry = [OakPasteboard.findPasteboard current])
 	{
 		std::string str = to_s(entry.string);
 		if(regexp::search("\\A.*?(\\.|/).*?:\\d+\\z", str))
 		{
-			if([entry.string hasPrefix:fc.path])
-					fc.filterString = [NSString stringWithCxxString:path::relative_to(str, to_s(fc.path))];
-			else	fc.filterString = entry.string;
+			if([entry.string hasPrefix:directory])
+					query = [NSString stringWithCxxString:path::relative_to(str, to_s(directory))];
+			else	query = entry.string;
 		}
 	}
 
+#if HAVE_OAK_SWIFTUI
+	if(self.window.attachedSheet)
+		return;
+	if(!self.openQuicklyPalette)
+		self.openQuicklyPalette = [[OakCommandPalette alloc] initWithTheme:[OakThemeEnvironment new]];
+
+	__weak OakCommandPalette* palette = self.openQuicklyPalette;
+	FileChooser* search = [[FileChooser alloc] initWithResultsHandler:^(NSArray<NSDictionary*>* results, BOOL searching){
+		OakCommandPalette* panel = palette;
+		if(!panel)
+			return;
+		NSMutableArray<OakCommandPaletteItem*>* items = [NSMutableArray arrayWithCapacity:results.count];
+		for(NSDictionary* result in results)
+		{
+			NSDictionary* openItem = result[@"item"];
+			NSString* identifier = openItem[@"path"] ?: openItem[@"identifier"];
+			OakCommandPaletteItem* item = [[OakCommandPaletteItem alloc] initWithTitle:result[@"title"]
+				subtitle:result[@"directory"] keyEquivalent:@"" category:OakCommandPaletteCategoryFile actionIdentifier:identifier];
+			item.representedObject = openItem;
+			[items addObject:item];
+		}
+		[panel setSearchResults:items searching:searching];
+	}];
+	search.currentDocument = self.selectedDocumentUUID;
+	search.filterString = query;
+	__weak DocumentWindowController* owner = self;
+	[self.openQuicklyPalette showSearchIn:self.window label:@"Open Quickly" placeholder:@"Search files by name or path…"
+		query:query scopes:@[ @"All", @"Open Documents", @"Uncommitted Documents" ] scope:search.sourceIndex
+		onChange:^(NSString* query, NSInteger scope){
+			search.sourceIndex = scope;
+			search.filterString = query;
+		} onSelect:^(OakCommandPaletteItem* item){
+			NSDictionary* openItem = item.representedObject;
+			[search learnSelectionAtPath:openItem[@"path"]];
+			DocumentWindowController* controller = owner;
+			controller.workspaceMode = WorkspaceModeEditor;
+			[controller openItems:@[ openItem ] closingOtherTabs:OakIsAlternateKeyOrMouseEvent() activate:YES];
+		} onClose:^{
+			[search endSearch];
+		}];
+	search.path = directory;
+#else
+	FileChooser* fc = FileChooser.sharedInstance;
+	fc.path            = nil;
+	fc.filterString    = query;
+	fc.currentDocument = self.selectedDocumentUUID;
+	fc.target          = self;
+	fc.action          = @selector(fileChooserDidSelectItems:);
+	fc.path            = directory;
 	[fc showWindowRelativeToFrame:[self.window convertRectToScreen:[self.textView convertRect:[self.textView visibleRect] toView:nil]]];
+#endif
 }
 
 - (void)fileChooserDidSelectItems:(FileChooser*)sender
@@ -3698,11 +4278,13 @@ static NSDictionary* ContextDocument(OakDocument* document)
 
 - (void)performBundleItem:(bundles::item_ptr)anItem
 {
+	if(!anItem)
+		return;
 	if(anItem->kind() == bundles::kItemTypeTheme)
 	{
 		self.documentView.textView.themeUUID = [NSString stringWithCxxString:anItem->uuid()];
 	}
-	else
+	else if(self.selectedDocument)
 	{
 		[self showWindow:self];
 		[self makeTextViewFirstResponder:self];
@@ -3832,7 +4414,8 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	BOOL active = YES;
 	if([menuItem action] == @selector(toggleTerminalPanel:))
 	{
-		[menuItem setTitle:self.terminalPanelController.panelVisible ? @"Hide Terminal Panel" : @"Show Terminal Panel"];
+		BOOL terminalVisible = self.terminalPanelController.panelVisible && !self.terminalPanelController.isPanelTucked;
+		[menuItem setTitle:terminalVisible ? @"Hide Terminal Panel" : @"Show Terminal Panel"];
 #if !HAVE_OAK_SWIFTUI
 		active = NO; // built without the Swift terminal component
 #endif
@@ -3846,6 +4429,14 @@ static NSDictionary* ContextDocument(OakDocument* document)
 	}
 	else if([menuItem action] == @selector(toggleFileBrowser:))
 		[menuItem setTitle:self.fileBrowserVisible ? @"Hide File Browser" : @"Show File Browser"];
+	else if([menuItem action] == @selector(stopRunConfiguration:))
+		active = self.runPanelController.isRunning;
+	else if([menuItem action] == @selector(restartRunConfiguration:))
+		active = self.runPanelController.canRestart;
+	else if([menuItem action] == @selector(toggleProjectBreakpoint:))
+		active = [self breakpointPath] && !self.selectedDocument.isDocumentEdited;
+	else if([menuItem action] == @selector(stepOverProjectDebugging:) || [menuItem action] == @selector(stepIntoProjectDebugging:) || [menuItem action] == @selector(stepOutOfProjectDebugging:))
+		active = self.runPanelController.canStep;
 	else if([menuItem action] == @selector(toggleOutline:))
 		[menuItem setTitle:self.outlineVisible ? @"Hide Outline" : @"Show Outline"];
 	else if([menuItem action] == @selector(toggleSourceControl:))
@@ -3882,9 +4473,15 @@ static NSDictionary* ContextDocument(OakDocument* document)
 		[menuItem setDynamicTitle:active ? [NSString stringWithFormat:@"Select “%@”", self.selectedDocument.displayName] : @"Select Document"];
 	}
 	else if([menuItem action] == @selector(goToProjectFolder:))
-		active = self.projectPath != nil;
+		active = self.projectWorkspace != nil || self.projectPath != nil;
+	else if([menuItem action] == @selector(addWorkspaceFolder:))
+		active = self.projectWorkspace != nil;
+	else if([menuItem action] == @selector(removeWorkspaceFolder:))
+		active = self.projectWorkspace.folders.count > 0;
+	else if([menuItem action] == @selector(takeWorkspaceFolderFrom:))
+		active = self.projectWorkspace != nil;
 	else if([menuItem action] == @selector(performCloseProject:))
-		active = self.projectPath != nil || self.defaultProjectPath != nil || self.fileBrowserVisible;
+		active = self.projectWorkspace != nil || self.projectPath != nil || self.defaultProjectPath != nil || self.fileBrowserVisible;
 	else if([menuItem action] == @selector(goToParentFolder:))
 		active = [self.window firstResponder] != self.textView;
 	else if([menuItem action] == @selector(moveFocus:))
@@ -4093,6 +4690,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 				[controller.window zoom:self];
 
 			[controller.window orderFront:self];
+			[controller.terminalPanelController refreshFloatingPanelVisibility];
 			keyWindow = controller.window;
 		}
 
@@ -4116,6 +4714,19 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 - (void)setupControllerForProject:(NSDictionary*)project skipMissingFiles:(BOOL)skipMissing
 {
+	ProjectWorkspace* workspace;
+	if(NSString* path = project[@"workspacePath"])
+	{
+		NSError* error;
+		workspace = [ProjectWorkspace workspaceAtURL:[NSURL fileURLWithPath:path] error:&error];
+		if(!workspace)
+			NSLog(@"[Workspace] Could not restore %@: %@", path, error.localizedDescription);
+	}
+	[self setupControllerForProject:project skipMissingFiles:skipMissing workspace:workspace];
+}
+
+- (void)setupControllerForProject:(NSDictionary*)project skipMissingFiles:(BOOL)skipMissing workspace:(ProjectWorkspace*)workspace
+{
 	self.sourceControlVisible = NO;
 	if(self.fileBrowser)
 	{
@@ -4137,20 +4748,30 @@ static NSUInteger DisableSessionSavingCount = 0;
 		self.terminalPanelController.panelHeight = height.doubleValue;
 	self.terminalPanelController.panelVisible = [project[@"terminalPanelVisible"] boolValue];
 
-	self.defaultProjectPath = project[@"projectPath"];
-	self.projectPath        = project[@"projectPath"];
-	self.fileBrowserHistory = project[@"archivedFileBrowserState"] ?: project[@"fileBrowserState"];
+	self.projectWorkspace = workspace;
+	self.workspaceFallbackFolder = workspace ? project[@"workspaceFallbackFolder"] : nil;
+	self.defaultProjectPath = workspace ? nil : project[@"projectPath"];
+	if(workspace)
+		[self updateWorkspaceContext];
+	else
+		self.projectPath = self.defaultProjectPath;
+	self.fileBrowserHistory = project[@"workspacePath"] && !workspace ? nil : project[@"archivedFileBrowserState"] ?: project[@"fileBrowserState"];
 	self.layoutView.fileBrowserCollapsed = [project[@"fileBrowserCollapsed"] boolValue];
 	self.layoutView.sourceControlCollapsed = [project[@"sourceControlCollapsed"] boolValue];
 	self.layoutView.outlineCollapsed = [project[@"outlineCollapsed"] boolValue];
+	self.layoutView.runAndDebugCollapsed = [project[@"runAndDebugCollapsed"] boolValue];
 	self.layoutView.outlineHeight = [project[@"outlineHeight"] doubleValue];
 	self.fileBrowserVisible = [project[@"fileBrowserVisible"] boolValue];
-	if(self.fileBrowserVisible && !self.fileBrowser.URL && self.projectPath)
+	if(!workspace && self.fileBrowserVisible && !self.fileBrowser.URL && self.projectPath)
 		[self.fileBrowser goToURL:[NSURL fileURLWithPath:self.projectPath]];
 	self.sourceControlVisible = [project[@"sourceControlVisible"] boolValue];
 	self.outlineVisible     = [project[@"outlineVisible"] boolValue];
+	NSArray* watches = [project[@"debugWatchExpressions"] isKindOfClass:NSArray.class] ? project[@"debugWatchExpressions"] : nil;
+	if(watches.count || self.runPanelController)
+		[self prepareRunPanel].watchExpressions = watches;
+	[self setRunPanelVisible:[project[@"runAndDebugVisible"] boolValue]];
 	if(!self.visibleSidebarSections)
-		self.sidebarSectionsToRestore = [project[@"sidebarSectionsToRestore"] unsignedIntegerValue] & (SidebarSectionProject | SidebarSectionOutline | SidebarSectionSourceControl);
+		self.sidebarSectionsToRestore = [project[@"sidebarSectionsToRestore"] unsignedIntegerValue] & (SidebarSectionProject | SidebarSectionOutline | SidebarSectionSourceControl | SidebarSectionRunAndDebug);
 
 	NSMutableArray<OakDocument*>* documents = [NSMutableArray array];
 	NSInteger selectedTabIndex = 0;
@@ -4191,6 +4812,11 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 	if(documents.count)
 		[self openAndSelectDocument:documents[selectedTabIndex] activate:YES];
+	else if(workspace)
+		[self updateWindowTitle];
+
+	if(self.layoutView.runAndDebugView)
+		[self.runPanelController refresh:nil];
 
 	// Start the shell once the project/document context exists, so it opens in the window's folder.
 	if(self.terminalPanelController.panelVisible)
@@ -4259,6 +4885,12 @@ static NSUInteger DisableSessionSavingCount = 0;
 {
 	NSMutableDictionary* res = [NSMutableDictionary dictionary];
 
+	if(NSURL* workspaceURL = self.projectWorkspaceURL)
+	{
+		res[@"workspacePath"] = workspaceURL.path;
+		if(self.workspaceFallbackFolder)
+			res[@"workspaceFallbackFolder"] = self.workspaceFallbackFolder;
+	}
 	if(NSString* projectPath = self.defaultProjectPath)
 		res[@"projectPath"] = projectPath;
 	if(id history = self.fileBrowserHistory)
@@ -4285,6 +4917,10 @@ static NSUInteger DisableSessionSavingCount = 0;
 	res[@"outlineVisible"]     = @(self.outlineVisible);
 	res[@"outlineCollapsed"]   = @(self.layoutView.outlineCollapsed);
 	res[@"outlineHeight"]      = @(self.layoutView.outlineHeight);
+	res[@"runAndDebugVisible"] = @(self.layoutView.runAndDebugView != nil);
+	res[@"runAndDebugCollapsed"] = @(self.layoutView.runAndDebugCollapsed);
+	if(self.runPanelController.watchExpressions.count)
+		res[@"debugWatchExpressions"] = self.runPanelController.watchExpressions;
 	if(self.sidebarSectionsToRestore)
 		res[@"sidebarSectionsToRestore"] = @(self.sidebarSectionsToRestore);
 
@@ -4329,7 +4965,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 	NSMutableArray* projects = [NSMutableArray array];
 	for(DocumentWindowController* controller in [controllers reverseObjectEnumerator])
 	{
-		if(!controller.projectPath && !controller.fileBrowserVisible && !controller.terminalPanelController.panelVisible && controller.documents.count == 1 && is_disposable(controller.selectedDocument))
+		if(!controller.projectWorkspace && !controller.projectPath && !controller.fileBrowserVisible && !controller.terminalPanelController.panelVisible && controller.documents.count == 1 && is_disposable(controller.selectedDocument))
 			continue;
 		[projects addObject:[controller sessionInfoIncludingUntitledDocuments:includeUntitled]];
 	}
@@ -4390,8 +5026,12 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 	for(DocumentWindowController* delegate in SortedControllers())
 	{
-		if(delegate.fileBrowserVisible && aDocument.path && [aDocument.path hasPrefix:delegate.projectPath])
-			return delegate;
+		if(delegate.fileBrowserVisible && aDocument.path)
+		{
+			if(delegate.projectWorkspace ? [delegate.projectWorkspace folderContainingPath:aDocument.path] != nil
+			                             : delegate.projectPath && path::is_child(to_s(aDocument.path), to_s(delegate.projectPath)))
+				return delegate;
+		}
 
 		for(OakDocument* document in delegate.documents)
 		{
@@ -4473,14 +5113,12 @@ static NSUInteger DisableSessionSavingCount = 0;
 	std::map<size_t, DocumentWindowController*> candidates;
 	for(DocumentWindowController* candidate in SortedControllers())
 	{
-		if(candidate.projectPath)
+		for(NSString* parent in parents)
 		{
-			std::string const projectPath = to_s(candidate.projectPath);
-			for(NSString* parent in parents)
-			{
-				if(path::is_child(to_s(parent), projectPath))
-					candidates.emplace(parent.length - candidate.projectPath.length, candidate);
-			}
+			NSString* root = candidate.projectWorkspace ? [candidate.projectWorkspace folderContainingPath:parent] : candidate.projectPath;
+			NSString* normalizedParent = candidate.projectWorkspace ? parent.stringByStandardizingPath.stringByResolvingSymlinksInPath : parent;
+			if(root && ([root isEqualToString:@"/"] || path::is_child(to_s(normalizedParent), to_s(root))))
+				candidates.emplace(normalizedParent.length - MIN(normalizedParent.length, root.length), candidate);
 		}
 	}
 
@@ -4562,6 +5200,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 	for(DocumentWindowController* candidate in SortedControllers())
 	{
+		if(candidate.projectWorkspace)
+			continue;
 		NSString* candidatePath = candidate.defaultProjectPath ?: candidate.projectPath;
 		if(candidatePath && [folder isEqualToString:to_ns(path::resolve(to_s(candidatePath)))])
 		{
@@ -4574,6 +5214,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 	}
 
 	DocumentWindowController* controller = SortedControllers().firstObject;
+	if(controller.projectWorkspace)
+		controller = nil;
 	NSString* previousFolder = controller.defaultProjectPath ?: controller.projectPath;
 	if(previousFolder)
 	{

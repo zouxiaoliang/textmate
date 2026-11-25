@@ -28,6 +28,7 @@ static CGFloat const kLeadingButtonWidth = 30;
 static CGFloat const kLeadingButtonHeight = 24;
 static CGFloat const kLeadingButtonPadding = 6;
 static CGFloat const kCompactTabMinimumWidth = 56;
+static CGFloat const kTrailingNewTabButtonGap = 24;
 static CGFloat const kTabDragDistance = 10;
 static CGFloat const kTabDragRailDistance = 40;
 
@@ -1792,6 +1793,14 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	[self updateToLayout:[self makeLayout]];
 }
 
+- (void)setNewTabButtonAtTrailingEdge:(BOOL)trailing
+{
+	if(_newTabButtonAtTrailingEdge == trailing)
+		return;
+	_newTabButtonAtTrailingEdge = trailing;
+	[self updateToLayout:[self makeLayout]];
+}
+
 - (void)setLeadingButtons:(NSArray<NSButton*>*)buttons
 {
 	for(NSButton* button in _leadingButtons)
@@ -1849,6 +1858,11 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	else if(_leadingControl)
 		inset += kLeadingButtonPadding;
 	return inset;
+}
+
+- (CGFloat)statusTextWidthWithPadding
+{
+	return _statusTextLabel.stringValue.length ? NSWidth(_statusTextLabel.frame) + 16 : 0;
 }
 
 - (NSArray<OakTabFrame*>*)makeLayoutForTabItems:(NSArray<OakTabItem*>*)tabItems inRectOfWidth:(CGFloat)totalWidth
@@ -1941,8 +1955,9 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	static NSString* const firstTabIdentifier = [NSUUID UUID].UUIDString;
 	// Keep tabs clear of the traffic lights, controls, add button, and status label.
 	CGFloat visibleWidth = NSWidth(self.bounds) - NSWidth(self.createNewTabButton.frame) - self.tabStartInset;
-	if(_statusTextLabel.stringValue.length)
-		visibleWidth -= NSWidth(_statusTextLabel.frame) + 16;
+	visibleWidth -= [self statusTextWidthWithPadding];
+	if(self.newTabButtonAtTrailingEdge)
+		visibleWidth -= kTrailingNewTabButtonGap;
 	// When the controls leave less than a normal tab width, keep the selected
 	// file reachable and let its title truncate.
 	NSUInteger minimumVisible = _leadingButtons.count && visibleWidth >= kCompactTabMinimumWidth ? 1 : 0;
@@ -2080,7 +2095,8 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	}
 
 	NSRect createNewTabButtonFrame = _createNewTabButton.frame;
-	CGFloat bottomInset = self.isWindowTitleBar ? 0 : 1;
+	BOOL fillsBarHeight = self.isWindowTitleBar || self.newTabButtonAtTrailingEdge;
+	CGFloat bottomInset = fillsBarHeight ? 0 : 1;
 	CGFloat y = NSMinY(self.bounds) + bottomInset, height = MAX(0, NSHeight(self.bounds) - bottomInset);
 	CGFloat centerY = NSMidY(self.bounds);
 	CGFloat leading = self.tabStartInset;
@@ -2115,7 +2131,9 @@ static void* kOakTabViewSelectedContext  = &kOakTabViewSelectedContext;
 	}
 
 	CGFloat addButtonHeight = NSHeight(createNewTabButtonFrame);
-	_createNewTabButton.frame = { { x, self.isWindowTitleBar ? centerY - addButtonHeight / 2 : round((height - addButtonHeight) / 2) }, createNewTabButtonFrame.size };
+	CGFloat addButtonX = self.newTabButtonAtTrailingEdge ? NSMaxX(self.bounds) - [self statusTextWidthWithPadding] - NSWidth(createNewTabButtonFrame) : x;
+	CGFloat addButtonY = fillsBarHeight ? centerY - addButtonHeight / 2 : round((height - addButtonHeight) / 2);
+	_createNewTabButton.frame = { { addButtonX, addButtonY }, createNewTabButtonFrame.size };
 	_statusTextLabel.hidden = _alternateTitleBarItems || _statusTextLabel.stringValue.length == 0;
 	if(!_statusTextLabel.hidden)
 	{

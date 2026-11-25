@@ -9,6 +9,7 @@ import AppKit
 	case goToLine
 	case findInProject
 	case setting
+	case file
 }
 
 @MainActor @objc public class OakCommandPaletteItem: NSObject, Identifiable {
@@ -44,6 +45,7 @@ import AppKit
 		case .goToLine:       return "text.cursor"
 		case .findInProject:  return "magnifyingglass"
 		case .setting:        return "gearshape"
+		case .file:           return "doc"
 		@unknown default:     return "questionmark.square"
 		}
 	}

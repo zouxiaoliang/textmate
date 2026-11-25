@@ -1,9 +1,11 @@
 #import <Cocoa/Cocoa.h>
 #import "GitRepository.h"
 
+@class GitEditorTheme;
+
 @interface GitWorkspaceViewController : NSViewController
 @property (nonatomic, copy) NSString* directory;
-@property (nonatomic, copy) NSString* syntaxThemeUUID;
+@property (nonatomic) GitEditorTheme* editorTheme;
 @property (nonatomic) BOOL softWrap;
 @property (nonatomic, getter=isActive) BOOL active;
 @property (nonatomic, readonly) NSView* titleBarItems;

@@ -11,6 +11,7 @@ NSString* const kUserDefaultsHTMLOutputSizeKey   = @"htmlOutputSize";
 static CGFloat const kMinimumProjectHeight = 72;
 static CGFloat const kMinimumSourceControlHeight = 115;
 static CGFloat const kMinimumOutlineHeight = 48;
+static CGFloat const kMinimumRunAndDebugHeight = 100;
 static CGFloat const kOutlineResizeEdgeHeight = 6;
 static CGFloat const kOutlineResizeIndicatorHeight = 3;
 static CGFloat const kSidebarChevronSize = 14;
@@ -49,6 +50,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 @property (nonatomic) NSButton* fileBrowserHeader;
 @property (nonatomic) NSButton* sourceControlHeader;
 @property (nonatomic) NSButton* outlineHeader;
+@property (nonatomic) NSButton* runAndDebugHeader;
 @property (nonatomic) ProjectOutlineResizeHandle* outlineResizeHandle;
 @property (nonatomic) NSArray<NSLayoutConstraint*>* sidebarConstraints;
 @property (nonatomic) NSLayoutConstraint* outlineHeightConstraint;
@@ -168,7 +170,8 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 {
 	NSMutableArray<NSView*>* views = [NSMutableArray array];
 	for(NSView* view : { _documentView, _htmlOutputView, (NSView*)_fileBrowserHeader, _fileBrowserActionsView, (NSView*)_fileBrowserView,
-	                    (NSView*)_sourceControlHeader, _sourceControlView, (NSView*)_outlineHeader, _outlineView })
+	                    (NSView*)_sourceControlHeader, _sourceControlView, (NSView*)_outlineHeader, _outlineView,
+	                    (NSView*)_runAndDebugHeader, _runAndDebugView })
 	{
 		if(view.superview)
 			[views addObject:view];
@@ -245,6 +248,14 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 	[self updateSidebar];
 }
 
+- (void)setRunAndDebugView:(NSView*)runAndDebugView
+{
+	if(_runAndDebugView == runAndDebugView)
+		return;
+	_runAndDebugView = runAndDebugView;
+	[self updateSidebar];
+}
+
 - (NSButton*)sidebarHeaderWithTitle:(NSString*)title action:(SEL)action
 {
 	NSButton* button = [NSButton buttonWithTitle:title target:self action:action];
@@ -267,7 +278,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 
 - (void)updateSidebar
 {
-	BOOL visible = _fileBrowserView || _sourceControlView || _outlineView;
+	BOOL visible = _runAndDebugView || _fileBrowserView || _sourceControlView || _outlineView;
 	if(!_sidebar && visible)
 	{
 		_sidebar = [[ProjectSidebarBackgroundView alloc] initWithFrame:NSZeroRect];
@@ -279,6 +290,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 		_fileBrowserHeader = [self sidebarHeaderWithTitle:@"Project" action:@selector(toggleFileBrowserCollapsed:)];
 		_sourceControlHeader = [self sidebarHeaderWithTitle:@"Source Control" action:@selector(toggleSourceControlCollapsed:)];
 		_outlineHeader = [self sidebarHeaderWithTitle:@"Outline" action:@selector(toggleOutlineCollapsed:)];
+		_runAndDebugHeader = [self sidebarHeaderWithTitle:@"Run & Debug" action:@selector(toggleRunAndDebugCollapsed:)];
 		_outlineResizeHandle = [[ProjectOutlineResizeHandle alloc] initWithFrame:NSZeroRect];
 		_outlineResizeHandle.layoutView = self;
 		_outlineResizeHandle.translatesAutoresizingMaskIntoConstraints = NO;
@@ -302,11 +314,13 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 	[self updateSidebarHeader:_fileBrowserHeader collapsed:_fileBrowserCollapsed];
 	[self updateSidebarHeader:_sourceControlHeader collapsed:_sourceControlCollapsed];
 	[self updateSidebarHeader:_outlineHeader collapsed:_outlineCollapsed];
+	[self updateSidebarHeader:_runAndDebugHeader collapsed:_runAndDebugCollapsed];
 
 	BOOL projectExpanded = _fileBrowserView && !_fileBrowserCollapsed;
 	BOOL filesExpanded = projectExpanded && !_fileBrowserView.folderCollapsed;
 	BOOL sourceControlExpanded = _sourceControlView && !_sourceControlCollapsed;
 	BOOL outlineExpanded = _outlineView && !_outlineCollapsed;
+	BOOL runAndDebugExpanded = _runAndDebugView && !_runAndDebugCollapsed;
 	NSView* projectActions = projectExpanded ? _fileBrowserActionsView : nil;
 	NSView* resizeHandle = (filesExpanded || sourceControlExpanded) && outlineExpanded ? _outlineResizeHandle : nil;
 	if(resizeHandle && !_outlineResizeHandle.superview)
@@ -338,6 +352,12 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 		if(outlineExpanded)
 			[rows addObject:_outlineView];
 	}
+	if(_runAndDebugView)
+	{
+		[rows addObject:_runAndDebugHeader];
+		if(runAndDebugExpanded)
+			[rows addObject:_runAndDebugView];
+	}
 
 	for(NSView* view in _sidebar.subviews)
 	{
@@ -350,6 +370,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 				if(view == _fileBrowserView || (view == _fileBrowserActionsView && _fileBrowserView)) header = _fileBrowserHeader;
 				else if(view == _sourceControlView) header = _sourceControlHeader;
 				else if(view == _outlineView) header = _outlineHeader;
+				else if(view == _runAndDebugView) header = _runAndDebugHeader;
 				[self.window makeFirstResponder:header];
 			}
 			[view removeFromSuperview];
@@ -363,7 +384,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 		if(row.superview != _sidebar)
 			OakAddAutoLayoutViewsToSuperview(@[ row ], _sidebar);
 
-		BOOL isHeader = row == _fileBrowserHeader || row == _sourceControlHeader || row == _outlineHeader;
+		BOOL isHeader = row == _fileBrowserHeader || row == _sourceControlHeader || row == _outlineHeader || row == _runAndDebugHeader;
 		BOOL hasActions = row == _fileBrowserHeader && projectActions;
 		if(hasActions && projectActions.superview != _sidebar)
 			OakAddAutoLayoutViewsToSuperview(@[ projectActions ], _sidebar);
@@ -387,24 +408,33 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 		top = row.bottomAnchor;
 	}
 
-	NSUInteger expandedCount = filesExpanded + sourceControlExpanded + outlineExpanded;
+	NSUInteger expandedCount = filesExpanded + sourceControlExpanded + outlineExpanded + runAndDebugExpanded;
+	NSLayoutPriority minimumHeightPriority = _runAndDebugView ? NSLayoutPriorityDragThatCannotResizeWindow + 3 : NSLayoutPriorityDefaultHigh + 1;
 	if(expandedCount)
 		[constraints addObject:[top constraintEqualToAnchor:_sidebar.bottomAnchor]];
 	if(expandedCount > 1)
 	{
 		auto minimumHeight = [&](NSView* view, CGFloat minHeight){
 			NSLayoutConstraint* minimum = [view.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight];
-			minimum.priority = NSLayoutPriorityDefaultHigh + 1;
+			minimum.priority = minimumHeightPriority;
 			[constraints addObject:minimum];
 		};
 		if(filesExpanded) minimumHeight(_fileBrowserView, kMinimumProjectHeight);
 		if(sourceControlExpanded) minimumHeight(_sourceControlView, kMinimumSourceControlHeight);
 		if(outlineExpanded) minimumHeight(_outlineView, kMinimumOutlineHeight);
+		if(runAndDebugExpanded) minimumHeight(_runAndDebugView, kMinimumRunAndDebugHeight);
+	}
+	if(runAndDebugExpanded && expandedCount > 1)
+	{
+		NSView* reference = filesExpanded ? _fileBrowserView : sourceControlExpanded ? _sourceControlView : _outlineView;
+		NSLayoutConstraint* preferred = [_runAndDebugView.heightAnchor constraintEqualToAnchor:reference.heightAnchor];
+		preferred.priority = minimumHeightPriority - 3;
+		[constraints addObject:preferred];
 	}
 	if(filesExpanded && sourceControlExpanded)
 	{
 		NSLayoutConstraint* preferred = [_sourceControlView.heightAnchor constraintEqualToAnchor:_fileBrowserView.heightAnchor multiplier:1.5];
-		preferred.priority = NSLayoutPriorityDefaultHigh - 1;
+		preferred.priority = minimumHeightPriority - 2;
 		[constraints addObject:preferred];
 	}
 	if(resizeHandle)
@@ -421,7 +451,7 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 		NSView* reference = filesExpanded ? _fileBrowserView : _sourceControlView;
 		_outlineHeightConstraint = _outlineHeight > 0 ? [_outlineView.heightAnchor constraintEqualToConstant:_outlineHeight]
 			: [_outlineView.heightAnchor constraintEqualToAnchor:reference.heightAnchor multiplier:0.5];
-		_outlineHeightConstraint.priority = NSLayoutPriorityDefaultHigh;
+		_outlineHeightConstraint.priority = minimumHeightPriority - 1;
 		[constraints addObject:_outlineHeightConstraint];
 	}
 
@@ -455,6 +485,16 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 	if(_sourceControlCollapsed == collapsed)
 		return;
 	_sourceControlCollapsed = collapsed;
+	[self updateSidebar];
+	if(self.sidebarStateDidChange)
+		self.sidebarStateDidChange(self);
+}
+
+- (void)setRunAndDebugCollapsed:(BOOL)collapsed
+{
+	if(_runAndDebugCollapsed == collapsed)
+		return;
+	_runAndDebugCollapsed = collapsed;
 	[self updateSidebar];
 	if(self.sidebarStateDidChange)
 		self.sidebarStateDidChange(self);
@@ -536,6 +576,11 @@ static CGFloat const kSidebarCollapseThreshold = 100;
 - (IBAction)toggleSourceControlCollapsed:(id)sender
 {
 	self.sourceControlCollapsed = !self.sourceControlCollapsed;
+}
+
+- (IBAction)toggleRunAndDebugCollapsed:(id)sender
+{
+	self.runAndDebugCollapsed = !self.runAndDebugCollapsed;
 }
 
 - (void)setFileBrowserWidth:(CGFloat)width

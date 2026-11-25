@@ -59,3 +59,26 @@ NSMenu* MBCreateMenu (MBMenu const& items, NSMenu* existingMenu)
 		[menu addItem:MBCreateMenuItem(item)];
 	return menu;
 }
+
+BOOL MBPerformRunMenuKeyEquivalent (NSMenu* menu, NSEvent* event)
+{
+	NSString* key = event.charactersIgnoringModifiers;
+	if(key.length != 1 || [key characterAtIndex:0] < NSF1FunctionKey || [key characterAtIndex:0] > NSF35FunctionKey)
+		return NO;
+
+	NSMenu* run = [menu itemWithTitle:@"Run"].submenu;
+	NSUInteger mask = NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl | NSEventModifierFlagOption;
+	NSUInteger modifiers = event.modifierFlags & mask;
+	for(NSMenuItem* item in run.itemArray)
+	{
+		if(![item.keyEquivalent isEqualToString:key] || (item.keyEquivalentModifierMask & mask) != modifiers)
+			continue;
+		if(![NSApp targetForAction:item.action to:item.target from:item])
+			return NO;
+		[run update];
+		if(item.enabled)
+			[NSApp sendAction:item.action to:item.target from:item];
+		return YES;
+	}
+	return NO;
+}

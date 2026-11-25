@@ -1,10 +1,51 @@
 #import "TerminalTabBarController.h"
 #if HAVE_OAK_SWIFTUI
+#import "FloatingPanel.h"
 #import "OakSwiftUI-Swift.h"
 #import <OakTabBarView/OakTabBarView.h>
 
+@interface TerminalTabBarView : OakTabBarView
+@property (nonatomic, weak) FloatingPanelDragBar* floatingDragBar;
+@property (nonatomic) BOOL tracksPanelDrag;
+@end
+
+@implementation TerminalTabBarView
+- (BOOL)acceptsFirstMouse:(NSEvent*)event
+{
+	return self.floatingDragBar || [super acceptsFirstMouse:event];
+}
+
+- (void)mouseDown:(NSEvent*)event
+{
+	self.tracksPanelDrag = self.floatingDragBar && event.clickCount == 1;
+	if(self.tracksPanelDrag)
+		[self.floatingDragBar mouseDown:event];
+	else
+		[super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent*)event
+{
+	if(self.tracksPanelDrag)
+		[self.floatingDragBar mouseDragged:event];
+	else
+		[super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent*)event
+{
+	if(self.tracksPanelDrag)
+	{
+		self.tracksPanelDrag = NO;
+		[self.floatingDragBar mouseUp:event];
+	}
+	else
+		[super mouseUp:event];
+}
+@end
+
 @interface TerminalTabBarController () <OakTabBarViewDelegate, OakTabBarViewDataSource>
-@property (nonatomic) OakTabBarView* tabBar;
+@property (nonatomic) TerminalTabBarView* terminalTabBar;
 @property (nonatomic, weak) OakTerminalPanelController* controller;
 @end
 
@@ -14,15 +55,23 @@
 	if(self = [super init])
 	{
 		_controller = controller;
-		_tabBar = [[OakTabBarView alloc] initWithFrame:NSZeroRect];
-		_tabBar.delegate = self;
-		_tabBar.dataSource = self;
-		_tabBar.neverHideLeftBorder = YES;
+		_terminalTabBar = [[TerminalTabBarView alloc] initWithFrame:NSZeroRect];
+		_terminalTabBar.delegate = self;
+		_terminalTabBar.dataSource = self;
+		_terminalTabBar.neverHideLeftBorder = YES;
 		__weak TerminalTabBarController* weakSelf = self;
 		controller.tabsDidChange = ^{ [weakSelf reloadTabs]; };
-		[controller installTabBar:_tabBar];
+		[controller installTabBar:_terminalTabBar];
 	}
 	return self;
+}
+
+- (OakTabBarView*)tabBar { return _terminalTabBar; }
+- (FloatingPanelDragBar*)floatingDragBar { return _terminalTabBar.floatingDragBar; }
+- (void)setFloatingDragBar:(FloatingPanelDragBar*)bar
+{
+	_terminalTabBar.floatingDragBar = bar;
+	_terminalTabBar.newTabButtonAtTrailingEdge = bar != nil;
 }
 
 - (void)reloadTabs
@@ -70,7 +119,7 @@
 	if(self.controller.sessionIdentifiers.count > 1 && self.detachSessionHandler)
 		self.detachSessionHandler(self.controller.sessionIdentifiers[index]);
 }
-- (void)tabBarViewDidDoubleClick:(OakTabBarView*)bar { [self.controller newTerminal]; }
+- (void)newTabInTabBar:(OakTabBarView*)bar { [self.controller newTerminal]; }
 
 - (void)performCloseTab:(OakTabBarView*)sender
 {

@@ -31,6 +31,7 @@ typedef NS_ENUM(NSInteger, FFSearchTarget) {
 
 @property (nonatomic, weak) id <FindDelegate> delegate;
 @property (nonatomic) NSString* projectFolder;
+@property (nonatomic) NSArray<NSDictionary<NSString*, NSString*>*>* workspaceFolders;
 @property (nonatomic) NSArray* fileBrowserItems;
 @property (nonatomic) NSUUID* documentIdentifier;
 

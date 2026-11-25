@@ -10,6 +10,7 @@
 @property (nonatomic) NSString*                                  defaultProjectPath;
 @property (nonatomic, readonly) NSString*                        projectPath; // effectiveProjectPath
 @property (nonatomic, readonly) NSString*                        untitledSavePath;
+@property (nonatomic, readonly) NSURL*                           projectWorkspaceURL;
 
 @property (nonatomic, readonly) NSArray<OakDocument*>*           documents;
 @property (nonatomic, readonly) OakDocument*                     selectedDocument;
@@ -31,9 +32,15 @@
 + (void)enableSessionSave;
 + (BOOL)saveSessionIncludingUntitledDocuments:(BOOL)includeUntitled;
 + (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender;
++ (void)stopAllRunSessions;
 
 - (void)showWindow:(id)sender;
 - (void)close;
++ (BOOL)openWorkspaceAtURL:(NSURL*)url error:(NSError**)error;
+- (BOOL)createWorkspaceAtURL:(NSURL*)url error:(NSError**)error;
+- (IBAction)addWorkspaceFolder:(id)sender;
+- (IBAction)removeWorkspaceFolder:(id)sender;
+- (IBAction)takeWorkspaceFolderFrom:(id)sender;
 
 - (IBAction)newFolder:(id)sender;
 - (IBAction)newDocumentInTab:(id)sender;
@@ -73,6 +80,17 @@
 
 - (IBAction)orderFrontFindPanel:(id)sender;
 - (IBAction)orderFrontRunCommandWindow:(id)sender;
+- (IBAction)showRunPanel:(id)sender;
+- (IBAction)showRunOutput:(id)sender;
+- (IBAction)configureRunPanel:(id)sender;
+- (IBAction)runSelectedConfiguration:(id)sender;
+- (IBAction)debugSelectedConfiguration:(id)sender;
+- (IBAction)toggleProjectBreakpoint:(id)sender;
+- (IBAction)stepOverProjectDebugging:(id)sender;
+- (IBAction)stepIntoProjectDebugging:(id)sender;
+- (IBAction)stepOutOfProjectDebugging:(id)sender;
+- (IBAction)stopRunConfiguration:(id)sender;
+- (IBAction)restartRunConfiguration:(id)sender;
 - (IBAction)goToFile:(id)sender;
 
 // ==================

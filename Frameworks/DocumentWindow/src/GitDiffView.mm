@@ -7,6 +7,9 @@
 #import <text/utf16.h>
 #import <theme/OakTheme.h>
 
+@implementation GitEditorTheme
+@end
+
 namespace {
 NSString* const DiffLine = @"TextMateDiffLine";
 NSString* const DiffBand = @"TextMateDiffBand";
@@ -101,9 +104,9 @@ struct PatchShape
 
 NSColor* LineFill(unichar kind) { return kind == '+' ? DiffAddition() : kind == '-' ? DiffDeletion() : nil; }
 
-void PaintGutter(NSRect row, CGFloat x, CGFloat width)
+void PaintGutter(NSRect row, CGFloat x, CGFloat width, NSColor* background)
 {
-	[DiffGutter() setFill];
+	[(background ?: DiffGutter()) setFill];
 	NSRectFill(NSMakeRect(x, NSMinY(row), width, NSHeight(row)));
 	[DiffGutterRule() setFill];
 	for(CGFloat boundary : {x+width/2-1, x+width-1})
@@ -122,6 +125,7 @@ CGFloat GitDiffInlineHeight(NSDictionary* patch)
 @interface GitDiffTextView : NSTextView
 @property CGFloat gutterWidth;
 @property BOOL inlinePatch;
+@property (nonatomic) GitEditorTheme* editorTheme;
 @end
 
 @interface GitDiffLayoutManager : NSLayoutManager
@@ -144,7 +148,8 @@ CGFloat GitDiffInlineHeight(NSDictionary* patch)
 		rect.origin.x = 0;
 		rect.size.width = NSWidth(view.bounds);
 		if(band && !foreground) {
-			[(view.inlinePatch ? DiffBackground() : DiffHeader()) setFill];
+			NSColor* fill = view.inlinePatch ? (view.editorTheme.background ?: DiffBackground()) : (view.editorTheme.gutterBackground ?: DiffHeader());
+			[fill setFill];
 			NSRectFill(rect);
 			[DiffBandRule() setFill];
 			NSRectFill(NSMakeRect(0, NSMaxY(rect)-1, rect.size.width, 1));
@@ -157,7 +162,7 @@ CGFloat GitDiffInlineHeight(NSDictionary* patch)
 		CGFloat column = view.gutterWidth / 2;
 		CGFloat codeX = origin.x + view.gutterWidth;
 		if(!foreground) {
-			PaintGutter(rect, origin.x, view.gutterWidth);
+			PaintGutter(rect, origin.x, view.gutterWidth, view.editorTheme.gutterBackground);
 			if(NSColor* color = LineFill(kind)) {
 				[color setFill];
 				NSRectFill(NSMakeRect(codeX, NSMinY(rect), MAX(0, NSMaxX(rect)-codeX), rect.size.height));
@@ -170,7 +175,7 @@ CGFloat GitDiffInlineHeight(NSDictionary* patch)
 			return;
 		}
 		if(firstFragment) {
-			NSDictionary* attributes = @{ NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: DiffNumber() };
+			NSDictionary* attributes = @{ NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: view.editorTheme.gutterForeground ?: DiffNumber() };
 			for(NSUInteger index = 0; index < 2; ++index) {
 				NSString* number = info[index == 0 ? @"old" : @"new"];
 				NSSize size = [number sizeWithAttributes:attributes];
@@ -209,7 +214,7 @@ CGFloat GitDiffInlineHeight(NSDictionary* patch)
 @implementation GitDiffTextView
 - (void)drawRect:(NSRect)rect
 {
-	if(self.gutterWidth) PaintGutter(rect, self.textContainerOrigin.x, self.gutterWidth);
+	if(self.gutterWidth) PaintGutter(rect, self.textContainerOrigin.x, self.gutterWidth, self.editorTheme.gutterBackground);
 	[super drawRect:rect];
 }
 @end
@@ -657,9 +662,9 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 - (void)drawRect:(NSRect)rect
 {
 	if(_inlinePatch) return;
-	[DiffBackground() setFill];
+	[(self.editorTheme.background ?: DiffBackground()) setFill];
 	NSRectFill(rect);
-	[DiffTitleFill() setFill];
+	[(self.editorTheme.background ?: DiffTitleFill()) setFill];
 	NSRectFill(NSIntersectionRect(rect, _titleBar.frame));
 }
 
@@ -667,7 +672,27 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 - (void)setFileIcon:(NSImage*)icon { _icon.image = icon; _icon.hidden = !icon; }
 - (void)setShowsPatch:(BOOL)value { if(_showsPatch != value) { _showsPatch = value; _lastPatch = nil; } }
 - (void)setSyntaxPath:(NSString*)value { if(![_syntaxPath isEqual:value]) { _syntaxPath = [value copy]; _lastPatch = nil; } }
-- (void)setSyntaxThemeUUID:(NSString*)value { if(![_syntaxThemeUUID isEqual:value]) { _syntaxThemeUUID = [value copy]; _lastPatch = nil; } }
+- (void)setEditorTheme:(GitEditorTheme*)theme
+{
+	if(_editorTheme == theme) return;
+	NSString* previousSyntax = _editorTheme.syntaxThemeUUID;
+	NSColor* previousForeground = _editorTheme.foreground;
+	_editorTheme = _textView.editorTheme = theme;
+	self.appearance = theme.appearance;
+	[self setNeedsDisplay:YES];
+	[_textView setNeedsDisplay:YES];
+	[self updateChunkBackgrounds];
+	BOOL syntaxChanged = previousSyntax != theme.syntaxThemeUUID && ![previousSyntax isEqual:theme.syntaxThemeUUID];
+	BOOL foregroundChanged = previousForeground != theme.foreground && ![previousForeground isEqual:theme.foreground];
+	if(_lastPatch && (syntaxChanged || foregroundChanged)) {
+		NSDictionary* patch = _lastPatch;
+		NSArray<NSValue*>* selection = _textView.selectedRanges;
+		_lastPatch = nil;
+		[self showTitle:_title.stringValue subtitle:_lastSubtitle patch:patch preserveScroll:YES];
+		_textView.selectedRanges = selection;
+	}
+}
+
 - (void)setChunkActions:(NSArray<NSNumber*>*)actions handler:(void(^)(NSUInteger, GitRepositoryAction))handler
 {
 	if(![_chunkActions isEqual:actions]) {
@@ -760,7 +785,7 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 			controls = [NSStackView stackViewWithViews:buttons];
 			controls.spacing = 6;
 			controls.wantsLayer = YES;
-			controls.layer.backgroundColor = DiffHeader().CGColor;
+			controls.layer.backgroundColor = (self.editorTheme.gutterBackground ?: DiffHeader()).CGColor;
 			[self->_textView addSubview:controls];
 			self->_chunkControls[key] = controls;
 		}
@@ -778,8 +803,14 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 - (void)viewDidChangeEffectiveAppearance
 {
 	[super viewDidChangeEffectiveAppearance];
+	[self updateChunkBackgrounds];
+}
+
+- (void)updateChunkBackgrounds
+{
 	[self.effectiveAppearance performAsCurrentDrawingAppearance:^{
-		for(NSStackView* controls in self->_chunkControls.allValues) controls.layer.backgroundColor = DiffHeader().CGColor;
+		NSColor* fill = self.editorTheme.gutterBackground ?: DiffHeader();
+		for(NSStackView* controls in self->_chunkControls.allValues) controls.layer.backgroundColor = fill.CGColor;
 	}];
 }
 
@@ -826,7 +857,7 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 		_textView.minSize = NSMakeSize(_textView.minSize.width, shape.height());
 		NSParagraphStyle* body = DiffParagraph(CodeHeight, gutterWidth+5, YES);
 		NSParagraphStyle* heading = DiffParagraph(ChunkHeight, HeaderInset + (_inlinePatch ? 8 : 0));
-		DiffSyntax syntax(self.syntaxPath, self.syntaxThemeUUID, text.length);
+		DiffSyntax syntax(self.syntaxPath, self.editorTheme.syntaxThemeUUID, text.length);
 		NSUInteger checksumLength = ChecksumLength(self.syntaxPath);
 		HunkRange oldRange, newRange;
 		BOOL inHunk = NO, firstLineOfHunk = NO;
@@ -876,7 +907,7 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 				NSDictionary* info = @{ @"old": old, @"new": newNumber, @"kind": @(kind), @"edge": @(edge), @"startsAddition": @(startsAddition),
 					@"endsInNewline": @(kind != '\\' || row+1 < lines.count) };
 				NSMutableAttributedString* value = [[NSMutableAttributedString alloc] initWithString:[code stringByAppendingString:@"\n"] attributes:@{
-					NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: kind == '\\' ? DiffAnnotation() : DiffCodeText(),
+					NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: kind == '\\' ? DiffAnnotation() : (self.editorTheme.foreground ?: DiffCodeText()),
 					NSParagraphStyleAttributeName: body, DiffLine: info,
 				}];
 				BOOL checksum = kind != '\\' && HighlightChecksum(value, code, checksumLength);
@@ -899,7 +930,7 @@ BOOL HighlightChecksum(NSMutableAttributedString* value, NSString* code, NSUInte
 		_textView.gutterWidth = 0;
 		_textView.minSize = NSMakeSize(_textView.minSize.width, 0);
 		[display appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:@{
-			NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: NSColor.textColor, NSParagraphStyleAttributeName: DiffParagraph(CodeHeight, HeaderInset, YES)
+			NSFontAttributeName: DiffFont(), NSForegroundColorAttributeName: self.editorTheme.foreground ?: NSColor.textColor, NSParagraphStyleAttributeName: DiffParagraph(CodeHeight, HeaderInset, YES)
 		}]];
 	}
 	if(display.length && [display.string hasSuffix:@"\n"]) [display deleteCharactersInRange:NSMakeRange(display.length-1, 1)];

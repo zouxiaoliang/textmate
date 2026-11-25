@@ -23,6 +23,7 @@
 #import <text/utf16.h>
 #import <OakFoundation/NSString Additions.h>
 #import <OakFoundation/OakFoundation.h>
+#import <MenuBuilder/MenuBuilder.h>
 #import <OakFoundation/OakFindProtocol.h>
 #import <OakSystem/application.h>
 #import <crash/info.h>
@@ -1741,6 +1742,8 @@ doScroll:
 
 - (void)performBundleItem:(bundles::item_ptr)item
 {
+	if(!item || !documentView)
+		return;
 	crash_reporter_info_t info("%s %s", sel_getName(_cmd), item->name_with_bundle().c_str());
 	switch(item->kind())
 	{
@@ -1953,6 +1956,8 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 	BOOL foreignResponderOwnsKeys = [self.window.firstResponder respondsToSelector:@selector(oak_ownsKeyEquivalents)];
 	if(!hasKey && (otherTextViewHasKey || recordingShortcut || foreignResponderOwnsKeys || noCommandFlag))
 		return NO;
+	if(!recordingShortcut && MBPerformRunMenuKeyEquivalent(NSApp.mainMenu, anEvent))
+		return YES;
 
 	std::string const eventString = to_s(anEvent);
 
@@ -2157,7 +2162,7 @@ static void update_menu_key_equivalents (NSMenu* menu, std::multimap<std::string
 	}
 }
 
-- (BOOL)hasSelection                     { return documentView->has_selection(); }
+- (BOOL)hasSelection                     { return documentView && documentView->has_selection(); }
 
 - (void)flagsChanged:(NSEvent*)anEvent
 {

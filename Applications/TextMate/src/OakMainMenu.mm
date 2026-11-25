@@ -3,6 +3,7 @@
 #import <bundles/bundles.h>
 #import <OakFoundation/NSString Additions.h>
 #import <BundleMenu/BundleMenu.h>
+#import <MenuBuilder/MenuBuilder.h>
 #import <crash/info.h>
 
 /*
@@ -65,6 +66,9 @@ static CGPoint MenuPosition ()
 
 - (BOOL)performKeyEquivalent:(NSEvent*)anEvent
 {
+	if(![NSApp.keyWindow.firstResponder isKindOfClass:NSClassFromString(@"OakKeyEquivalentView")] && MBPerformRunMenuKeyEquivalent(self, anEvent))
+		return YES;
+
 	std::string const keyString = to_s(anEvent);
 	crash_reporter_info_t info("Key equivalent ‘%s’.", keyString.c_str());
 

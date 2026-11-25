@@ -69,7 +69,7 @@ Use [GitHub Issues](https://github.com/tectiv3/textmate/issues) for bug reports 
   <img src="docs/screenshots/terminal.png" width="640" alt="Terminal Panel">
 </p>
 
-Every document window has its own terminal panel, shown here docked at the bottom with the tab bar of running shells. The panel takes the editor's font, zoom level and theme colours.
+Every document window has its own terminal panel, docked at the bottom by default. It can also dock at the left or right. The panel follows the editor's font, zoom level and theme colours, even when no project or document is open.
 
 # Building
 
@@ -415,6 +415,49 @@ formatOnSave = true
 
 The legacy `lspFormatOnSave` key still works for backward compatibility.
 
+## Multi-root Workspaces
+
+Choose **File → Open Workspace…** to open a VS Code `.code-workspace` file, or **File → New Workspace…** to save the current project as a workspace. Use **Add Folders to Workspace…** and **Remove Folder from Workspace…** to edit the folder list. Removing a folder leaves its files and open tabs in place.
+
+Each folder in **Project** has its own disclosure arrow. Workspace files support local `folders[].path` and optional `name` aliases, including paths relative to the workspace file. Folder edits preserve other top-level configuration. Open tabs, the fallback folder, and tree expansion are stored in TextMate's local session, not in the shared file.
+
+**Find in Project** searches all workspace folders; choose **Workspace Folder** in the Find scope menu to search one. **Open Quickly**, Git, and new terminals use the selected document's folder (the most specific one if folders overlap). Choose a fallback folder in the Project location menu for files outside those folders or when no file is open. Existing terminal sessions keep their original directory.
+
+**Open Quickly** (`⌘T` by default) uses a floating search palette. Search by file name or relative path, use the arrow keys and Return to open a result, and append `:line` to jump to a line (for example, `main.go:42`). The scope menu switches between all project files, open documents, and uncommitted documents.
+
+## Run & Debug
+
+Choose **Run → Show Run & Debug** to open the Run & Debug section alongside Project and Outline. Click its disclosure arrow to collapse it without changing the other sections. The configuration list includes the owning folder in a workspace. The green play button debugs supported Go launch configurations and runs tasks and other supported launch configurations without a debugger. Choose **Run Without Debugging** from the ellipsis menu or press **Control-F5** to run without attaching. **Hide Run & Debug** removes only that section; it does not stop the session or close Output.
+
+Starting a configuration opens **Output** in a floating panel, without resizing the editor or replacing the Terminal. The panel shows combined output and exit status, including ANSI foreground colors. Drag its header toward a display edge to see an accent appear and feel the panel ease into a firm snap. It sticks while you slide along the edge; pull farther inward to detach or drag across to another display. Dropping just across the seam keeps the panel open on the destination display. Release while snapped and the panel curves into a slim tab with a Genie-style animation. Hover over or click the tab to reverse the animation; moving the pointer away tucks it again. With macOS Reduce Motion enabled, Output switches without the animation. Click the pin in the Output header to keep the panel expanded and above regular windows, even while working in another app. Click it again to restore auto-hide at a docked edge. Close Output without stopping the process, and reopen the log with **Run → Show Output**. The first run of a resolved command plan asks for confirmation in each window; changed commands or folders require approval again.
+
+Use **Run → Configure Run & Debug…** or the gear beside the configuration picker to open `.vscode/launch.json` in TextMate. In a multi-root workspace, choose the folder first. If the file is missing, TextMate creates a VS Code-compatible Go template; it never overwrites an existing file. Save your changes, then select a configuration to run or debug. TextMate does not infer or run a program when no configuration is present.
+
+TextMate reads JSON with comments in each folder's `.vscode/tasks.json` and `.vscode/launch.json`. It supports foreground `process` tasks, local Go launch configurations in `auto` or `debug` mode as `go run`, and the TextMate-specific `textmate-process` launch type for local executables. Launch configurations use `program`, `args`, `cwd`, and `env`; tasks use `command`, `args`, and `options.cwd` / `options.env`. A `preLaunchTask` must name a supported task in the same folder; a failed task prevents launch. Supported variables include `${workspaceFolder}`, `${workspaceFolder:name}`, `${workspaceFolderBasename}`, `${file}`, `${fileDirname}`, `${fileBasename}`, and `${relativeFile}`. File variables require a file in the configuration's folder.
+
+Go launches accept `buildFlags` for both Run and Debug. Use a quoted argument string such as `"-tags dev"` or an array such as `["-tags", "dev"]`. These are passed as separate arguments, without invoking a shell.
+
+For a VS Code `node-terminal` launch, **Run** supports a single executable and arguments (including quoted arguments), optionally prefixed by `cd <directory> &&`. For example, `cd ${workspaceFolder}/app/gbot-gui && wails dev` starts Wails in that directory, with the configuration's `env` applied. These commands run in the output panel, without a shell or JavaScript debugger. Shell and background tasks, compound launches, interactive consoles, pipes, redirects, shell escaping and expansions, and command variables are not supported.
+
+To debug Go, install Go and a compatible Delve (`dlv`) with Unix socket support. TextMate looks for `dlv` on `PATH`, including `~/go/bin` by default. Create a local launch configuration in the owning folder's `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "Debug Go", "type": "go", "request": "launch", "mode": "debug", "program": "${workspaceFolder}" }
+  ]
+}
+```
+
+Save your Go files, open **Run & Debug**, and click the leftmost gutter beside a source line or press **F9** to toggle its breakpoint. Breakpoints belong to the window and use saved source line numbers; they are not written to the workspace file. Select the configuration and choose **Debug** (**F5**). The panel asks for permission separately from **Run** and shows any pre-launch task output before starting Delve.
+
+During a debug session, a floating toolbar above the editor holds Continue/Pause, the three step actions, Restart, and Stop. Drag its handle to move it horizontally. Hiding the sidebar or Output does not hide the toolbar. Use **F5** to continue, **F10** to step over, **F11** to step into, **Shift+F11** to step out, **Control+Shift+F5** to restart the last approved plan, or **Shift+F5** to stop. Restart waits for the previous process to stop. Start a new run to use edits to the configuration. `stopOnEntry: true` pauses at launch.
+
+When paused, the execution arrow marks the current line. Use the goroutine picker in **Call Stack** to inspect a different goroutine. Select a frame to open its source and inspect locals and arguments in **Variables**. Expand structured values to inspect their fields. In **Watch**, enter a Go expression and press Return or click **+**. Right-click an expression to edit or remove it. Watches refresh in the selected frame on every pause and are restored with the window.
+
+Select a breakpoint in the sidebar to jump to its source. Right-click it to enable, disable, remove, or edit it. A hollow orange marker means Delve has not verified the breakpoint; hover over the sidebar entry for details. If Delve moves a breakpoint to an executable line, clicking the entry opens that line. An edited breakpoint can have a Go condition, a hit-count expression (such as `>= 3`), or a log message. A logpoint prints to Output instead of pausing; enclose an expression in braces to include its value. This version only debugs local Go launches (`auto` or `debug`); it does not support attach or remote targets. Cursor's **Trace Inspector** comes from the Ruby debugger extension and is not a Delve feature.
+
 ## Git Workspace and Source Control
 
 Open a Git project and select **Git** in the title bar. Select **Editor** to return to the same open tabs, or press **Control+Shift+G** to switch between the modes. In Git mode, use the left sidebar to browse the working copy, history, stashes, and local and remote references. The middle pane shows changed files or commits. Select a row to see its diff on the right. In Working Copy, search filters changed files. In History, use the magnifying glass menu to search the selected history by commit message, author, hash, or repository relative file path.
@@ -435,14 +478,16 @@ Choose **Stashes → Save Stash** to set aside changes, optionally including unt
 
 ## Terminal
 
-Each document window has an embedded terminal panel backed by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). Press **Control+`** to show or hide it (View → Show Terminal Panel). Pick the edge under View → Terminal Panel Position — left, right, or bottom (default). Drag the divider to resize; the placement and size are remembered and seed new windows.
+Each document window has an embedded terminal panel backed by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). Press **Control+`** to show or hide it (View → Show Terminal Panel).
+
+Choose **Left**, **Right**, or **Bottom** under View → Terminal Panel Position. Drag the divider to resize it; the placement and size are remembered and seed new windows. Floating Terminal is temporarily disabled, and saved floating placements open at the bottom.
 
 Showing the panel focuses the terminal, hiding it returns focus to the editor. Each window starts one login shell (your account's shell) in the project folder, falling back to the file browser root, the current document's folder, and then your home folder, with TextMate's environment plus the `.textmate` variables for that directory. Opening another document afterwards does not move a running shell.
 
 | Action | Key |
 |--------|-----|
 | Show/hide panel | **Control+`** |
-| New session | **+** in the tab bar, or double-click empty tab-bar space |
+| New session | **+** in the tab bar |
 | Next/previous session | **Cmd+Opt+→** / **Cmd+Opt+←** (terminal focused) |
 | Clear screen and scrollback | **Cmd+K** (terminal focused) |
 
@@ -458,7 +503,7 @@ There is no preferences pane for the terminal; placement and size are stored in 
 
 | Default | Description |
 |---------|-------------|
-| `terminalPanelPlacement` | Panel edge: `left`, `right`, or `bottom` (default: `bottom`) |
+| `terminalPanelPlacement` | Panel placement: `floating` (default), `left`, `right`, or `bottom` |
 | `terminalPanelWidth` | Panel width in points when docked left or right (default: `320`) |
 | `terminalPanelHeight` | Panel height in points when docked at the bottom (default: `220`) |
 

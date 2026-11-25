@@ -8,6 +8,8 @@
 @property (nonatomic) OakDocument* document;
 @property (nonatomic) BOOL hideStatusBar;
 @property (nonatomic) BOOL showsLineNumbers;
+@property (nonatomic, copy) void (^toggleBreakpointAtLine)(NSUInteger line);
+- (void)showDebugGutter:(BOOL)visible breakpoints:(NSIndexSet*)breakpoints disabledBreakpoints:(NSIndexSet*)disabled unverifiedBreakpoints:(NSIndexSet*)unverified executionLine:(NSUInteger)line;
 - (IBAction)toggleLineNumbers:(id)sender;
 
 - (void)addAuxiliaryView:(NSView*)aView atEdge:(NSRectEdge)anEdge;

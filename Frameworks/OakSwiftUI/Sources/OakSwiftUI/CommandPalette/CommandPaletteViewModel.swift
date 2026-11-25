@@ -93,6 +93,10 @@ public class CommandPaletteViewModel: ObservableObject {
 	@Published public var selectedIndex: Int = 0
 	@Published private(set) var markedItems: Set<UUID> = []
 	@Published private(set) var removalError: String?
+	@Published private(set) var isSearching = false
+	@Published var searchScope = 0 {
+		didSet { if searchScope != oldValue { refreshExternalSearch() } }
+	}
 
 	public var onItemSelected: ((OakCommandPaletteItem) -> Void)?
 	var onItemsSelected: (([OakCommandPaletteItem]) -> Void)?
@@ -104,12 +108,36 @@ public class CommandPaletteViewModel: ObservableObject {
 	private var itemsByMode: [PaletteMode: [OakCommandPaletteItem]] = [:]
 	public private(set) var frecencyData: [String: FrecencyEntry] = [:]
 	private let scopedSearch: (label: String, placeholder: String, suggestions: (String) -> [OakCommandPaletteItem])?
+	private var externalSearch: ((String, Int) -> Void)?
+	private(set) var searchScopes: [String] = []
 
 	public init() { scopedSearch = nil }
 
 	init(label: String, placeholder: String, suggestions: @escaping (String) -> [OakCommandPaletteItem]) {
 		scopedSearch = (label, placeholder, suggestions)
 		activeMode = .commands
+	}
+
+	func configureSearch(query: String, scopes: [String], scope: Int, onChange: @escaping (String, Int) -> Void) {
+		searchScopes = scopes
+		searchScope = scope
+		filterText = query
+		externalSearch = onChange
+	}
+
+	func setSearchResults(_ items: [OakCommandPaletteItem], searching: Bool) {
+		guard externalSearch != nil else { return }
+		let previouslySelected = selectedItem?.actionIdentifier
+		isSearching = searching
+		filteredItems = items.map { RankedItem(item: $0, matchedIndices: [], score: 0) }
+		selectedIndex = filteredItems.firstIndex { $0.item.actionIdentifier == previouslySelected } ?? 0
+	}
+
+	private func refreshExternalSearch() {
+		guard let externalSearch else { return }
+		selectedIndex = 0
+		externalSearch(filterText, searchScope)
+		selectedIndex = 0
 	}
 
 	var searchLabel: String? {
@@ -209,6 +237,10 @@ public class CommandPaletteViewModel: ObservableObject {
 	}
 
 	private func processFilterChange() {
+		if externalSearch != nil {
+			refreshExternalSearch()
+			return
+		}
 		if scopedSearch != nil {
 			applyFilter()
 			selectedIndex = 0

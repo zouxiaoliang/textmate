@@ -120,6 +120,39 @@ struct CommandPaletteViewModelTests {
 		#expect(vm.selectedItem === personal)
 	}
 
+	@Test func filePalettePreservesExternalRankingAndSelection() {
+		func file(_ path: String) -> OakCommandPaletteItem {
+			OakCommandPaletteItem(title: "main.go", subtitle: path, keyEquivalent: "", category: .file, actionIdentifier: path)
+		}
+		let vm = CommandPaletteViewModel(label: "Open Quickly", placeholder: "Search files…") { _ in [] }
+		var query = ""
+		var scope = 0
+		vm.configureSearch(query: "main.go:42", scopes: ["All", "Open Documents"], scope: 0) {
+			query = $0
+			scope = $1
+		}
+		#expect(vm.filterText == "main.go:42")
+		let first = file("src/main.go")
+		let second = file("test/main.go")
+		vm.setSearchResults([first, second], searching: true)
+		#expect(vm.filteredItems.map(\.item.actionIdentifier) == ["src/main.go", "test/main.go"])
+		#expect(vm.isSearching)
+		vm.selectNext()
+		vm.setSearchResults([file("test/main.go"), first], searching: false)
+		#expect(!vm.isSearching)
+		#expect(vm.selectedItem?.actionIdentifier == "test/main.go")
+
+		vm.filterText = "src/main.go:21"
+		vm.searchScope = 1
+		#expect(query == "src/main.go:21")
+		#expect(scope == 1)
+		var selected: String?
+		vm.onItemSelected = { selected = $0.actionIdentifier }
+		vm.setSearchResults([first], searching: false)
+		vm.acceptSelection()
+		#expect(selected == "src/main.go")
+	}
+
 	@Test func frecencyBoostDecaysOverTime() {
 		let vm = CommandPaletteViewModel()
 		let now = Date().timeIntervalSinceReferenceDate

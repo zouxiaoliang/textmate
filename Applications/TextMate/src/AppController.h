@@ -38,6 +38,8 @@
 @interface AppController (Documents)
 - (void)newDocument:(id)sender;
 - (void)openDocument:(id)sender;
+- (IBAction)newWorkspace:(id)sender;
+- (IBAction)openWorkspace:(id)sender;
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender;
 @end
 

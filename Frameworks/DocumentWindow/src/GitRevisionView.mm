@@ -362,6 +362,14 @@ NSColor* FileColor(unichar status)
 	} completionHandler:nil];
 }
 
+- (void)setEditorTheme:(GitEditorTheme*)theme
+{
+	if(_editorTheme == theme) return;
+	_editorTheme = theme;
+	self.appearance = theme.appearance;
+	[self scheduleVisiblePatches];
+}
+
 - (void)setSoftWrap:(BOOL)enabled
 {
 	if(_softWrap == enabled) return;
@@ -690,10 +698,11 @@ NSColor* FileColor(unichar status)
 			diff.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 			diff.softWrap = _softWrap;
 			diff.syntaxPath = path;
-			diff.syntaxThemeUUID = self.syntaxThemeUUID;
+			diff.editorTheme = self.editorTheme;
 			[diff showTitle:path.lastPathComponent subtitle:@"" patch:item[@"patch"]];
 			cell.subviews = @[diff];
 		}
+		diff.editorTheme = self.editorTheme;
 		diff.softWrap = _softWrap;
 		CGFloat width = NSWidth(cell.bounds);
 		if(_softWrap && width > 0) {
@@ -957,7 +966,7 @@ NSColor* FileColor(unichar status)
 	preview.showsPatch = NO;
 	preview.softWrap = self.softWrap;
 	preview.syntaxPath = path;
-	preview.syntaxThemeUUID = self.syntaxThemeUUID;
+	preview.editorTheme = self.editorTheme;
 	preview.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 	[sheet.contentView addSubview:preview];
 	done.frame = NSMakeRect(565, 9, 83, 27);

@@ -1,21 +1,28 @@
 #import <Cocoa/Cocoa.h>
 
-// Last-used panel edge, seeding new windows like the file browser's placement/width.
+#ifndef TEXTMATE_ENABLE_FLOATING_TERMINAL
+#define TEXTMATE_ENABLE_FLOATING_TERMINAL 0
+#endif
+
+// Last-used panel placement, seeding new windows like the file browser's placement/width.
 extern NSString* const kUserDefaultsTerminalPanelPlacementKey;
 
 // Values of panelPosition and of the saved placement.
 extern NSString* const kTerminalPanelPositionLeft;
 extern NSString* const kTerminalPanelPositionRight;
 extern NSString* const kTerminalPanelPositionBottom;
+extern NSString* const kTerminalPanelPositionFloating;
 
-// Hosts the existing project layout alongside an independently docked terminal panel.
+// Hosts the project layout and a terminal panel that can float or dock.
 @interface TerminalPanelViewController : NSViewController
 @property (nonatomic) BOOL panelVisible;
+@property (nonatomic, readonly, getter=isPanelTucked) BOOL panelTucked;
+@property (nonatomic, copy) void (^floatingPanelDismissed)(void);
 @property (nonatomic, copy) NSString* (^terminalDirectoryProvider)(void);
 @property (nonatomic, copy) NSDictionary<NSString*, NSString*>* (^terminalEnvironmentProvider)(NSString* directory); // base environment for new shells
 @property (nonatomic, copy) NSDictionary<NSString*, NSString*>* (^contextEnvironmentProvider)(NSUUID*);
 @property (nonatomic, copy) void (^contextSessionClosed)(NSUUID*);
-@property (nonatomic, copy) NSString* panelPosition; // left, right, bottom
+@property (nonatomic, copy) NSString* panelPosition; // floating, left, right, bottom
 @property (nonatomic) CGFloat panelWidth;
 @property (nonatomic) CGFloat panelHeight;
 - (void)takeTerminalSession:(NSUUID*)identifier fromPanel:(TerminalPanelViewController*)source;
@@ -38,6 +45,7 @@ extern NSString* const kTerminalPanelPositionBottom;
 @property (nonatomic, readonly) BOOL hasTerminal; // YES once a shell has been started or received
 - (void)startTerminal; // starts the first shell in the directory from terminalDirectoryProvider
 - (void)focusTerminal;
+- (void)refreshFloatingPanelVisibility;
 - (void)applyTerminalFont:(NSFont*)font;
 - (void)applyTerminalBackground:(NSColor*)background foreground:(NSColor*)foreground caret:(NSColor*)caret selection:(NSColor*)selection syntaxColors:(NSArray<NSColor*>*)syntaxColors;
 @property (nonatomic, readonly) BOOL terminalHasRunningWork; // a session is running a foreground program

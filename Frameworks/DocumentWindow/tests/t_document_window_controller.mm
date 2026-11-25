@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import "EmptyWorkspaceCommandProbe.h"
 #import "../src/DocumentWindowController.h"
 #import "../src/EmptyWorkspaceView.h"
 #import "../src/GitDiffView.h"
@@ -10,16 +11,21 @@
 #import "../src/ProjectLayoutView.h"
 #import "../src/SourceControlViewController.h"
 #import "../src/TerminalPanelViewController.h"
+#import <FileBrowser/FileBrowserOutlineView.h>
 #import <FileBrowser/FileBrowserViewController.h>
 #import <FileBrowser/FileItem.h>
+#import <FileBrowser/FileItemTableCellView.h>
 #import <Find/Find.h>
+#import <OakFilterList/FileChooser.h>
 #import <OakFoundation/OakFoundation.h>
+#import <OakFoundation/NSString Additions.h>
 #import <OakTextView/OakDocumentView.h>
 #import <OakTextView/OakNavigationHistory.h>
 #import <OakTextView/OakTextView.h>
 #import <OakTabBarView/OakTabBarView.h>
 #import <Preferences/Keys.h>
 #import <Preferences/ShortcutsPreferences.h>
+#import <bundles/query.h>
 #import <document/OakDocument.h>
 #import <document/OakDocumentController.h>
 #import <kvdb/kvdb.h>
@@ -108,7 +114,10 @@ void test_empty_window_shortcuts_follow_menu_configuration ()
 		NSMenuItem* find = addShortcut([menu itemWithTitle:@"Edit"].submenu, @"Find", @"", @"", 0);
 		find.submenu = [[NSMenu alloc] initWithTitle:@"Find"];
 		addShortcut(find.submenu, @"Find and Replace…", @"orderFrontFindPanel:", @"f", NSEventModifierFlagCommand).tag = FFSearchTargetDocument;
-		addShortcut(find.submenu, @"Find in Project…", @"orderFrontFindPanel:", @"F", NSEventModifierFlagCommand | NSEventModifierFlagShift).tag = FFSearchTargetProject;
+		EmptyWorkspaceCommandProbe* probe = [EmptyWorkspaceCommandProbe new];
+		NSMenuItem* projectFind = addShortcut(find.submenu, @"Find in Project…", @"orderFrontFindPanel:", @"F", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+		projectFind.tag = FFSearchTargetProject;
+		projectFind.target = probe;
 		addShortcut([menu itemWithTitle:@"Bundles"].submenu, @"Select Bundle Item…", @"showBundleItemChooser:", @"t", NSEventModifierFlagControl | NSEventModifierFlagCommand);
 		addShortcut([menu itemWithTitle:@"TextMate"].submenu, @"Preferences…", @"showPreferences:", @",", NSEventModifierFlagCommand);
 
@@ -119,7 +128,7 @@ void test_empty_window_shortcuts_follow_menu_configuration ()
 		EmptyWorkspaceView* empty = [controller valueForKey:@"emptyStateView"];
 		NSView* files = [empty valueForKey:@"files"];
 		NSView* tools = [empty valueForKey:@"tools"];
-		NSArray<NSView*>* fileRows = [files valueForKey:@"rows"];
+		NSArray<NSButton*>* fileRows = [files valueForKey:@"rows"];
 		NSArray<NSView*>* toolRows = [tools valueForKey:@"rows"];
 		OAK_ASSERT(fileRows.count == 6 && toolRows.count == 6);
 		OAK_ASSERT([[(NSTextField*)[fileRows.firstObject valueForKey:@"shortcut"] stringValue] isEqualToString:@"⌘O"]);
@@ -130,14 +139,22 @@ void test_empty_window_shortcuts_follow_menu_configuration ()
 		OAK_ASSERT(NSMinX(tools.frame) > NSMaxX(files.frame));
 		OAK_ASSERT(NSMinY(tools.frame) == NSMinY(files.frame));
 		OAK_ASSERT(NSMaxY(empty.heading.frame) < NSMinY(files.frame));
-		for(NSView* row in fileRows)
+		for(NSButton* row in fileRows)
 		{
 			NSView* name = [row valueForKey:@"name"];
 			NSView* keycap = [[row valueForKey:@"shortcut"] superview].superview;
 			OAK_ASSERT(!NSIntersectsRect(name.frame, keycap.frame));
 			OAK_ASSERT(NSMaxX(keycap.frame) == NSWidth(row.bounds));
+			for(NSPoint point : { NSMakePoint(NSMidX(name.frame), NSMidY(name.frame)), NSMakePoint(NSMidX(keycap.frame), NSMidY(keycap.frame)), NSMakePoint(NSMaxX(name.frame) + 6, NSMidY(row.bounds)) })
+				OAK_ASSERT([files hitTest:[row convertPoint:point toView:files.superview]] == row);
 		}
+		[fileRows[3] performClick:nil];
+		OAK_ASSERT(probe.invokedItem == nil);
+		probe.allowsAction = YES;
+		[fileRows[3] performClick:nil];
+		OAK_ASSERT(probe.invokedItem == projectFind && probe.invokedItem.tag == FFSearchTargetProject);
 		NSMenuItem* open = [menu itemWithTitle:@"File"].submenu.itemArray.firstObject;
+		open.target = probe;
 		palette.keyEquivalent = @"k";
 		palette.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
 		[NSNotificationCenter.defaultCenter postNotificationName:MenuShortcutsDidChangeNotification object:nil];
@@ -150,7 +167,11 @@ void test_empty_window_shortcuts_follow_menu_configuration ()
 		OAK_ASSERT(files.superview == nil);
 		files = [empty valueForKey:@"files"];
 		tools = [empty valueForKey:@"tools"];
-		OAK_ASSERT([(NSArray*)[files valueForKey:@"rows"] count] == 5);
+		fileRows = [files valueForKey:@"rows"];
+		OAK_ASSERT(fileRows.count == 6);
+		OAK_ASSERT([(NSView*)[[fileRows.firstObject valueForKey:@"shortcut"] superview].superview isHidden]);
+		[fileRows.firstObject performClick:nil];
+		OAK_ASSERT(probe.invokedItem == open);
 		[controller setValue:@YES forKey:@"disableFileBrowserWindowResize"];
 		controller.fileBrowserWidth = 250;
 		[controller.window setContentSize:NSMakeSize(560, 320)];
@@ -162,10 +183,88 @@ void test_empty_window_shortcuts_follow_menu_configuration ()
 		OAK_ASSERT(NSMaxX(tools.frame) <= NSWidth(empty.contentView.bounds));
 		[empty.documentView scrollRectToVisible:tools.frame];
 		OAK_ASSERT(NSContainsRect(empty.documentVisibleRect, tools.frame));
+		[fileRows.lastObject scrollRectToVisible:fileRows.lastObject.bounds];
+		[fileRows.lastObject performClick:nil];
+		OAK_ASSERT(controller.documents.count == 1 && empty.hidden);
 		[controller close];
 		NSApp.mainMenu = originalMenu;
 		[DocumentWindowController enableSessionSave];
 	});
+}
+
+void test_open_quickly_search_streams_ranked_paths_and_line_locations ()
+{
+	__block NSString* directory;
+	__block NSString* mainPath;
+	__block id originalSource;
+	__block FileChooser* search;
+	__block NSArray<NSDictionary*>* matches;
+	__block BOOL finished = NO;
+	NSString* sourceKey = @"fileChooserSourceIndex";
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		NSFileManager* files = NSFileManager.defaultManager;
+		directory = [NSTemporaryDirectory().stringByResolvingSymlinksInPath stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+		NSString* source = [directory stringByAppendingPathComponent:@"src"];
+		OAK_ASSERT([files createDirectoryAtPath:source withIntermediateDirectories:YES attributes:nil error:nil]);
+		mainPath = [source stringByAppendingPathComponent:@"main.go"];
+		NSString* otherPath = [directory stringByAppendingPathComponent:@"main.go"];
+		OAK_ASSERT([@"package main\n" writeToFile:mainPath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+		OAK_ASSERT([@"package demo\n" writeToFile:otherPath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+		originalSource = [NSUserDefaults.standardUserDefaults objectForKey:sourceKey];
+		search = [[FileChooser alloc] initWithResultsHandler:^(NSArray<NSDictionary*>* results, BOOL searching){
+			matches = results;
+			finished = !searching;
+		}];
+		search.sourceIndex = kFileChooserAllSourceIndex;
+		search.filterString = @"src/main.go:42";
+		search.path = directory;
+		OAK_ASSERT(!finished && search.window == nil);
+	});
+	NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+	while(deadline.timeIntervalSinceNow > 0)
+	{
+		__block BOOL ready;
+		dispatch_sync(dispatch_get_main_queue(), ^{ ready = finished; });
+		if(ready)
+			break;
+		[NSThread sleepForTimeInterval:0.01];
+	}
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		OAK_ASSERT(finished);
+		OAK_ASSERT_EQ(matches.count, (NSUInteger)1);
+		OAK_ASSERT([matches.firstObject[@"item"][@"path"] isEqual:mainPath]);
+		OAK_ASSERT([matches.firstObject[@"item"][@"selectionString"] isEqual:@"42"]);
+		search.filterString = @"*.go";
+		OAK_ASSERT(matches.count == 2);
+		[search endSearch];
+		[NSUserDefaults.standardUserDefaults setObject:originalSource forKey:sourceKey];
+		[NSFileManager.defaultManager removeItemAtPath:directory error:nil];
+	});
+}
+
+void test_open_quickly_is_attached_to_its_editor_window ()
+{
+#if HAVE_OAK_SWIFTUI
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		NSString* directory = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+		OAK_ASSERT([NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
+		DocumentWindowController* controller = [DocumentWindowController new];
+		controller.defaultProjectPath = directory;
+		[controller showWindow:nil];
+		[controller goToFile:nil];
+		NSWindow* child = controller.window.childWindows.lastObject;
+		OAK_ASSERT(child && [child isKindOfClass:NSPanel.class] && child.isVisible);
+		OAK_ASSERT(child.parentWindow == controller.window && (child.styleMask & NSWindowStyleMaskNonactivatingPanel));
+		[controller close];
+		OAK_ASSERT(!child.isVisible && child.parentWindow == nil);
+		[NSFileManager.defaultManager removeItemAtPath:directory error:nil];
+		[DocumentWindowController enableSessionSave];
+	});
+#endif
 }
 
 void test_sidebar_window_only_grows_when_editor_needs_room ()
@@ -182,6 +281,65 @@ void test_sidebar_window_only_grows_when_editor_needs_room ()
 	OAK_ASSERT(NSEqualRects(SidebarExpandedFrame(atLeftEdge, screen, 250, 560, NO), NSMakeRect(0, 100, 651, 450)));
 	OAK_ASSERT(NSEqualRects(SidebarExpandedFrame(fullWidth, screen, 250, 560, NO), fullWidth));
 	OAK_ASSERT(NSEqualRects(SidebarExpandedFrame(narrow, screen, 250, 560, YES), NSMakeRect(300, 100, 651, 450)));
+}
+
+void test_sidebar_collapse_keeps_file_rows_valid_at_narrow_widths ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		NSURL* directory = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+		OAK_ASSERT([NSFileManager.defaultManager createDirectoryAtURL:directory withIntermediateDirectories:NO attributes:nil error:nil]);
+		NSURL* file = [directory URLByAppendingPathComponent:@"project-file.txt"];
+		OAK_ASSERT([@"Project file\n" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+		DocumentWindowController* controller = [DocumentWindowController new];
+		controller.defaultProjectPath = directory.path;
+		[controller setValue:@YES forKey:@"disableFileBrowserWindowResize"];
+		controller.fileBrowserWidth = 250;
+		controller.fileBrowserVisible = YES;
+		[controller.window setContentSize:NSMakeSize(900, 540)];
+		[controller showWindow:nil];
+		ProjectLayoutView* layout = [controller valueForKey:@"layoutView"];
+		FileBrowserViewController* browser = [controller valueForKey:@"fileBrowser"];
+		FileBrowserOutlineView* files = (FileBrowserOutlineView*)browser.outlineView;
+		browser.fileItem.arrangedChildren = [NSMutableArray arrayWithObject:[FileItem fileItemWithURL:file]];
+		[files reloadData];
+		OAK_ASSERT(files.numberOfRows == 1);
+		NSButton* toggle = [controller valueForKey:@"sidebarButton"];
+		NSRect originalFrame = controller.window.frame;
+		for(BOOL onRight : { NO, YES })
+		{
+			layout.fileBrowserOnRight = onRight;
+			[layout setSidebarTransitionWidth:16 opacity:0.1];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			CGFloat originalIndentation = files.rootIndentation;
+			CGFloat availableWidth = NSWidth([files frameOfCellAtColumn:0 row:0]);
+			OAK_ASSERT(availableWidth >= 16);
+			files.rootIndentation += availableWidth - 16;
+			[files reloadData];
+			FileItemTableCellView* cell = (FileItemTableCellView*)[files viewAtColumn:0 row:0 makeIfNecessary:YES];
+			OAK_ASSERT(cell && fabs(NSWidth(cell.frame) - 16) < 0.5);
+			[cell layoutSubtreeIfNeeded];
+			OAK_ASSERT(fabs(layout.visibleSidebarWidth - 16) < 0.5);
+			OAK_ASSERT(NSWidth(cell.openButton.frame) == 16);
+			OAK_ASSERT(cell.clipsToBounds);
+			files.rootIndentation = originalIndentation;
+			[files reloadData];
+			[layout setSidebarTransitionWidth:250 opacity:1];
+			[controller.window.contentView layoutSubtreeIfNeeded];
+			[toggle performClick:nil];
+			wait_for_sidebar_animation(controller);
+			OAK_ASSERT(!controller.fileBrowserVisible);
+			[toggle performClick:nil];
+			wait_for_sidebar_animation(controller);
+			OAK_ASSERT(controller.fileBrowserVisible && layout.sidebarOpacity == 1);
+			OAK_ASSERT(NSEqualRects(controller.window.frame, originalFrame));
+		}
+		[controller close];
+		[NSFileManager.defaultManager removeItemAtURL:directory error:nil];
+		[DocumentWindowController enableSessionSave];
+	});
 }
 
 void test_sidebar_collapses_when_dragged_small ()
@@ -699,6 +857,153 @@ void test_git_diff_marks_missing_newlines_on_both_sides ()
 		OAK_ASSERT([newLine[@"old"] isEqual:@""] && [newLine[@"new"] isEqual:@"+1"]);
 		OAK_ASSERT([note[@"old"] isEqual:@""] && [note[@"new"] isEqual:@""]);
 		OAK_ASSERT(GitDiffHunks(source).count == 1 && [GitDiffHunks(source).firstObject containsString:@"\\ No newline at end of file"]);
+	});
+}
+
+void test_empty_editor_git_workspace_and_terminal_share_the_selected_theme ()
+{
+	auto makeTheme = [](std::string const& background, std::string const& foreground){
+		auto item = std::make_shared<bundles::item_t>(oak::uuid_t().generate(), bundles::item_ptr(), bundles::kItemTypeTheme);
+		item->set_plist({ { "settings", plist::array_t{ plist::dictionary_t{ { "settings", plist::dictionary_t{
+			{ "background", background }, { "foreground", foreground }
+		} } } } } });
+		return item;
+	};
+	auto light = makeTheme("#F6F0DE", "#221F19");
+	auto dark = makeTheme("#312838", "#EEEAF5");
+	NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+	NSArray<NSString*>* keys = @[ @"themeAppearance", @"universalThemeUUID", @"darkModeThemeUUID" ];
+	NSMutableDictionary* previous = [NSMutableDictionary dictionary];
+	NSString* lightUUID = [NSString stringWithCxxString:light->uuid()];
+	__block DocumentWindowController* controller;
+	__block GitWorkspaceViewController* git;
+	void (^checkTerminalTheme)(NSColor*) = ^(NSColor* body){
+#if HAVE_OAK_SWIFTUI
+		TerminalPanelViewController* panel = [controller valueForKey:@"terminalPanelController"];
+		NSView* terminalContent = [panel valueForKey:@"panelView"];
+		OAK_ASSERT(panel.hasTerminal && panel.terminalSessionIdentifiers.count == 1);
+		OAK_ASSERT(terminalContent.layer.backgroundColor && CGColorEqualToColor(terminalContent.layer.backgroundColor, body.CGColor));
+#endif
+	};
+	void (^checkTheme)(bundles::item_ptr const&) = ^(bundles::item_ptr const& item){
+		theme_ptr theme = parse_theme(item);
+		NSColor* body = [NSColor colorWithCGColor:theme->background()];
+		NSColor* gutter = [NSColor colorWithCGColor:theme->gutter_styles().background];
+		EmptyWorkspaceView* empty = [controller valueForKey:@"emptyStateView"];
+		OakTabBarView* bar = [controller valueForKey:@"tabBarView"];
+		OAK_ASSERT(!controller.selectedDocument && [empty.heading.stringValue isEqual:@"No project open"]);
+		OAK_ASSERT([controller.window.backgroundColor isEqual:body]);
+		OAK_ASSERT([bar.titleBarBackgroundColor isEqual:body]);
+		OAK_ASSERT(empty.drawsBackground && [empty.backgroundColor isEqual:body]);
+		OAK_ASSERT([git.editorTheme.syntaxThemeUUID isEqual:[NSString stringWithCxxString:item->uuid()]]);
+		OAK_ASSERT([[git.view valueForKey:@"fillColor"] isEqual:body]);
+		OAK_ASSERT([[[git valueForKey:@"navigationSurface"] valueForKey:@"fillColor"] isEqual:gutter]);
+		OAK_ASSERT([empty.appearance.name isEqual:git.view.appearance.name]);
+		checkTerminalTheme(body);
+	};
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		[DocumentWindowController disableSessionSave];
+		bundles::add_item(light);
+		bundles::add_item(dark);
+		for(NSString* key in keys)
+			previous[key] = [defaults objectForKey:key];
+		[defaults setObject:lightUUID forKey:@"universalThemeUUID"];
+		[defaults setObject:[NSString stringWithCxxString:dark->uuid()] forKey:@"darkModeThemeUUID"];
+		[defaults setObject:@"dark" forKey:@"themeAppearance"];
+
+		controller = [DocumentWindowController new];
+		NSSegmentedControl* modes = [controller valueForKey:@"workspaceModeControl"];
+		EmptyWorkspaceView* empty = [controller valueForKey:@"emptyStateView"];
+		OAK_ASSERT(!empty.isHiddenOrHasHiddenAncestor);
+		OAK_ASSERT([empty.backgroundColor isEqual:[NSColor colorWithCGColor:parse_theme(dark)->background()]]);
+#if HAVE_OAK_SWIFTUI
+		TerminalPanelViewController* panel = [controller valueForKey:@"terminalPanelController"];
+		panel.terminalShellPath = @"/bin/sh";
+		panel.terminalShellArguments = @[];
+		((void(*)(id, SEL, id))objc_msgSend)(controller, @selector(toggleTerminalPanel:), nil);
+		checkTerminalTheme(empty.backgroundColor);
+#endif
+		modes.selectedSegment = 1;
+		[modes sendAction:modes.action to:modes.target];
+		git = [controller valueForKey:@"gitWorkspaceController"];
+		checkTheme(dark);
+
+		[defaults setObject:@"light" forKey:@"themeAppearance"];
+		[NSNotificationCenter.defaultCenter postNotificationName:NSUserDefaultsDidChangeNotification object:defaults];
+	});
+	NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:2];
+	while(deadline.timeIntervalSinceNow > 0)
+	{
+		__block BOOL updated;
+		dispatch_sync(dispatch_get_main_queue(), ^{ updated = [git.editorTheme.syntaxThemeUUID isEqual:lightUUID]; });
+		if(updated)
+			break;
+		[NSThread sleepForTimeInterval:0.01];
+	}
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		checkTheme(light);
+		NSSegmentedControl* modes = [controller valueForKey:@"workspaceModeControl"];
+		modes.selectedSegment = 0;
+		[modes sendAction:modes.action to:modes.target];
+		EmptyWorkspaceView* empty = [controller valueForKey:@"emptyStateView"];
+		OAK_ASSERT(!empty.isHiddenOrHasHiddenAncestor);
+		checkTheme(light);
+		[controller close];
+		for(NSString* key in keys)
+		{
+			if(previous[key]) [defaults setObject:previous[key] forKey:key];
+			else [defaults removeObjectForKey:key];
+		}
+		bundles::remove_item(light);
+		bundles::remove_item(dark);
+	});
+}
+
+void test_git_workspace_updates_surfaces_and_open_diff_with_editor_theme ()
+{
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		[NSApplication sharedApplication];
+		GitWorkspaceViewController* workspace = [GitWorkspaceViewController new];
+		GitEditorTheme* dark = [GitEditorTheme new];
+		dark.background = [NSColor colorWithSRGBRed:0.12 green:0.16 blue:0.22 alpha:1];
+		dark.gutterBackground = [NSColor colorWithSRGBRed:0.16 green:0.20 blue:0.26 alpha:1];
+		dark.foreground = NSColor.whiteColor;
+		dark.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+		workspace.editorTheme = dark;
+		NSView* content = workspace.view;
+		NSView* navigation = [workspace valueForKey:@"navigationSurface"];
+		NSView* pages = [workspace valueForKey:@"workspacePages"];
+		SourceControlViewController* workingCopy = [workspace valueForKey:@"workingCopy"];
+		GitDiffView* diff = [workspace valueForKey:@"diff"];
+		GitRevisionView* revision = [workspace valueForKey:@"revisionInspector"];
+		OAK_ASSERT([[content valueForKey:@"fillColor"] isEqual:dark.background]);
+		OAK_ASSERT([[navigation valueForKey:@"fillColor"] isEqual:dark.gutterBackground]);
+		OAK_ASSERT(diff.editorTheme == dark && revision.editorTheme == dark && [content.appearance.name isEqual:NSAppearanceNameDarkAqua]);
+
+		[diff showTitle:@"demo.txt" subtitle:@"" patch:@{ @"text": @"@@ -1,2 +1,2 @@\n context\n-old\n+new\n" }];
+		NSTextView* text = [diff valueForKey:@"textView"];
+		NSRange context = [text.string rangeOfString:@"context"];
+		OAK_ASSERT(context.location != NSNotFound);
+		OAK_ASSERT([[text.textStorage attribute:NSForegroundColorAttributeName atIndex:context.location effectiveRange:nil] isEqual:dark.foreground]);
+		text.selectedRange = context;
+
+		GitEditorTheme* light = [GitEditorTheme new];
+		light.background = [NSColor colorWithSRGBRed:0.97 green:0.94 blue:0.87 alpha:1];
+		light.gutterBackground = [NSColor colorWithSRGBRed:0.92 green:0.89 blue:0.82 alpha:1];
+		light.foreground = NSColor.blackColor;
+		light.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+		workspace.editorTheme = light;
+		OAK_ASSERT([[content valueForKey:@"fillColor"] isEqual:light.background] && [[pages valueForKey:@"fillColor"] isEqual:light.background]);
+		OAK_ASSERT([[navigation valueForKey:@"fillColor"] isEqual:light.gutterBackground] && [workingCopy.themeBackgroundColor isEqual:light.background]);
+		OAK_ASSERT([[[workspace.titleBarItems valueForKey:@"editorTheme"] background] isEqual:light.background]);
+		OAK_ASSERT(diff.editorTheme == light && revision.editorTheme == light && [diff.appearance.name isEqual:NSAppearanceNameAqua]);
+		OAK_ASSERT([[text.textStorage attribute:NSForegroundColorAttributeName atIndex:context.location effectiveRange:nil] isEqual:light.foreground]);
+		OAK_ASSERT(NSEqualRanges(text.selectedRange, context));
+		NSUInteger oldIndex = [text.string rangeOfString:@"old"].location, newIndex = [text.string rangeOfString:@"new"].location;
+		NSDictionary* removed = [text.textStorage attribute:@"TextMateDiffLine" atIndex:oldIndex effectiveRange:nil];
+		NSDictionary* added = [text.textStorage attribute:@"TextMateDiffLine" atIndex:newIndex effectiveRange:nil];
+		OAK_ASSERT([removed[@"kind"] unsignedShortValue] == '-' && [added[@"kind"] unsignedShortValue] == '+');
 	});
 }
 

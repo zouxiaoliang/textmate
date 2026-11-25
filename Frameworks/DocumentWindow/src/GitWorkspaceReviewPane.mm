@@ -156,6 +156,7 @@ NSString* EventAuthor(NSDictionary* entry)
 	_preview = [[GitDiffView alloc] initWithFrame:NSZeroRect];
 	_comparison = [[GitRevisionView alloc] initWithFrame:NSZeroRect];
 	_preview.softWrap = _comparison.softWrap = self.softWrap;
+	_preview.editorTheme = _comparison.editorTheme = self.editorTheme;
 	for(NSView* child in @[detailHeader, _preview, _comparison]) {
 		child.translatesAutoresizingMaskIntoConstraints = NO;
 		[detailPane addSubview:child];
@@ -168,6 +169,12 @@ NSString* EventAuthor(NSDictionary* entry)
 		[_comparison.leadingAnchor constraintEqualToAnchor:detailPane.leadingAnchor], [_comparison.trailingAnchor constraintEqualToAnchor:detailPane.trailingAnchor],
 	]];
 	[self clearDetails];
+}
+
+- (void)setEditorTheme:(GitEditorTheme*)theme
+{
+	_editorTheme = theme;
+	_preview.editorTheme = _comparison.editorTheme = theme;
 }
 
 - (void)setSoftWrap:(BOOL)enabled

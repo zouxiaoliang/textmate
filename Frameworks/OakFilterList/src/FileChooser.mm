@@ -234,6 +234,7 @@ static NSDictionary* globs_for_path (std::string const& path)
 	NSString* _searchPath;
 	NSUInteger _lastSearchToken;
 	NSMutableArray<OakDocument*>* _searchResults;
+	void (^_resultsHandler)(NSArray<NSDictionary*>*, BOOL);
 }
 @property (nonatomic) OakScopeBarViewController* scopeBar;
 @property (nonatomic) NSArray* sourceListLabels;
@@ -248,6 +249,27 @@ static NSDictionary* globs_for_path (std::string const& path)
 {
 	static FileChooser* sharedInstance = [self new];
 	return sharedInstance;
+}
+
+- (instancetype)initWithResultsHandler:(void(^)(NSArray<NSDictionary*>*, BOOL))handler
+{
+	if(self = [super initWithWindow:nil])
+	{
+		_resultsHandler = [handler copy];
+		_searchResults = [NSMutableArray array];
+		_sourceIndex = MIN((NSUInteger)[NSUserDefaults.standardUserDefaults integerForKey:kUserDefaultsFileChooserSourceIndexKey], kFileChooserUncommittedChangesSourceIndex);
+	}
+	return self;
+}
+
+- (void)endSearch
+{
+	[self stopSearch];
+	_scmInfo.reset();
+	_records = nil;
+	@synchronized(_searchResults) {
+		[_searchResults removeAllObjects];
+	}
 }
 
 - (id)init
@@ -345,7 +367,8 @@ static NSDictionary* globs_for_path (std::string const& path)
 	if(_currentDocument == identifier || [_currentDocument isEqual:identifier])
 		return;
 	_currentDocument = identifier;
-	[self reload];
+	if(!_resultsHandler || _path)
+		[self reload];
 }
 
 - (void)setSourceIndex:(NSUInteger)newIndex
@@ -353,7 +376,8 @@ static NSDictionary* globs_for_path (std::string const& path)
 	if(_sourceIndex != newIndex)
 	{
 		_sourceIndex = newIndex;
-		[self updateWindowTitle];
+		if(!_resultsHandler)
+			[self updateWindowTitle];
 		[self reload];
 
 		if(_sourceIndex == 0)
@@ -399,7 +423,25 @@ static NSDictionary* globs_for_path (std::string const& path)
 	}
 
 	NSArray* array = [_records filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"isMatched == YES"]];
-	self.items = [array sortedArrayUsingSelector:compareSelector];
+	NSArray<FileChooserItem*>* ranked = [array sortedArrayUsingSelector:compareSelector];
+	if(!_resultsHandler)
+	{
+		self.items = ranked;
+		return;
+	}
+
+	NSMutableArray<NSDictionary*>* results = [NSMutableArray array];
+	for(FileChooserItem* record in ranked)
+	{
+		[results addObject:@{
+			@"title": record.document.path.lastPathComponent ?: record.document.displayName,
+			@"directory": record.document.path ? to_ns(path::relative_to(to_s(record.document.path.stringByDeletingLastPathComponent), to_s(_path))) : @"",
+			@"item": [self openItemForRecord:record],
+		}];
+		if(results.count == 200)
+			break;
+	}
+	_resultsHandler(results, _searching);
 }
 
 // ========
@@ -411,6 +453,11 @@ static NSDictionary* globs_for_path (std::string const& path)
 	if(_path == aString || [_path isEqualToString:aString])
 		return;
 	_path = aString;
+	if(_resultsHandler)
+	{
+		[self reload];
+		return;
+	}
 	_scmInfo.reset();
 
 	if(_sourceIndex == kFileChooserAllSourceIndex)
@@ -452,9 +499,11 @@ static NSDictionary* globs_for_path (std::string const& path)
 {
 	if(!_scmInfo && (_scmInfo = scm::info(to_s(_path))))
 	{
+		__weak FileChooser* source = self;
 		_scmInfo->push_callback(^(scm::info_t const& info){
-			if(_sourceIndex == kFileChooserUncommittedChangesSourceIndex)
-				[self reloadSCMStatus];
+			FileChooser* chooser = source;
+			if(chooser && chooser->_scmInfo.get() == &info && chooser.sourceIndex == kFileChooserUncommittedChangesSourceIndex)
+				[chooser reloadSCMStatus];
 		});
 	}
 
@@ -469,6 +518,8 @@ static NSDictionary* globs_for_path (std::string const& path)
 		}
 		[self addRecordsForDocuments:scmStatus];
 	}
+	else
+		[self updateRecordsFrom:0];
 }
 
 - (void)startSearch:(NSString*)path
@@ -476,11 +527,16 @@ static NSDictionary* globs_for_path (std::string const& path)
 	if(_searching)
 		[self stopSearch];
 
-	self.items = @[ ];
+	if(!_resultsHandler)
+		self.items = @[ ];
 	_records = [NSMutableArray array];
 
 	if(!path)
+	{
+		if(_resultsHandler)
+			_resultsHandler(@[], NO);
 		return;
+	}
 
 	settings_t const settings = settings_for_path(NULL_STR, "", to_s(path));
 	NSMutableDictionary* options = [globs_for_path(to_s(path)) mutableCopy];
@@ -489,6 +545,8 @@ static NSDictionary* globs_for_path (std::string const& path)
 
 	size_t searchToken = _lastSearchToken;
 	_searching = YES;
+	if(_resultsHandler)
+		_resultsHandler(@[], YES);
 	@synchronized(_searchResults) {
 		[_searchResults removeAllObjects];
 	}
@@ -518,12 +576,15 @@ static NSDictionary* globs_for_path (std::string const& path)
 
 - (void)handleSearchResults:(NSTimer*)aTimer
 {
+	NSArray<OakDocument*>* batch;
 	@synchronized(_searchResults) {
 		if(_searchResults.count || !_searching)
 			_searchPath = _searching ? [_searchResults.lastObject.path stringByDeletingLastPathComponent] : nil;
-		[self addRecordsForDocuments:_searchResults];
+		batch = [_searchResults copy];
 		[_searchResults removeAllObjects];
 	}
+	if(batch.count || !_searching)
+		[self addRecordsForDocuments:batch];
 
 	if(_searching)
 	{
@@ -533,19 +594,30 @@ static NSDictionary* globs_for_path (std::string const& path)
 	else
 	{
 		[self stopSearch];
-		[self updateStatusText:self];
+		if(!_resultsHandler)
+			[self updateStatusText:self];
 	}
 }
 
 - (void)stopSearch
 {
-	if(std::exchange(_searching, NO))
-		++_lastSearchToken;
+	@synchronized(_searchResults) {
+		if(std::exchange(_searching, NO))
+			++_lastSearchToken;
+	}
 
 	[NSObject cancelPreviousPerformRequestsWithTarget:_progressIndicator selector:@selector(startAnimation:) object:self];
 	[_progressIndicator stopAnimation:self];
 	[_pollTimer invalidate];
 	_pollTimer = nil;
+}
+
+- (void)setFilterString:(NSString*)string
+{
+	if(_resultsHandler)
+		[self updateFilterString:string];
+	else
+		[super setFilterString:string];
 }
 
 - (void)updateFilterString:(NSString*)aString
@@ -559,6 +631,13 @@ static NSDictionary* globs_for_path (std::string const& path)
 	_filterString    = m && [m rangeAtIndex:2].location != NSNotFound ? [NSString stringWithCxxString:oak::normalize_filter(to_s([aString substringWithRange:[m rangeAtIndex:2]]))] : nil;
 	_selectionString = m && [m rangeAtIndex:3].location != NSNotFound ? [aString substringWithRange:[m rangeAtIndex:3]] : nil;
 	_symbolString    = m && [m rangeAtIndex:4].location != NSNotFound ? [aString substringWithRange:[m rangeAtIndex:4]] : nil;
+
+	if(_resultsHandler)
+	{
+		if(_records)
+			[self updateItems:self];
+		return;
+	}
 
 	if(![oldFilter isEqualToString:_globString ?: _filterString ?: @""])
 		[super updateFilterString:aString];
@@ -602,19 +681,22 @@ static NSDictionary* globs_for_path (std::string const& path)
 	}
 }
 
+- (NSDictionary*)openItemForRecord:(FileChooserItem*)record
+{
+	NSMutableDictionary* item = [NSMutableDictionary dictionary];
+	if(OakNotEmptyString(_selectionString))
+		item[@"selectionString"] = _selectionString;
+	if(record.document.path)
+			item[@"path"] = record.document.path;
+	else	item[@"identifier"] = record.document.identifier.UUIDString;
+	return item;
+}
+
 - (NSArray*)selectedItems
 {
 	NSMutableArray* res = [NSMutableArray array];
 	for(FileChooserItem* record in [self.items objectsAtIndexes:self.tableView.selectedRowIndexes])
-	{
-		NSMutableDictionary* item = [NSMutableDictionary dictionary];
-		if(OakNotEmptyString(_selectionString))
-			item[@"selectionString"] = _selectionString;
-		if(record.document.path)
-				item[@"path"] = record.document.path;
-		else	item[@"identifier"] = record.document.identifier.UUIDString;
-		[res addObject:item];
-	}
+		[res addObject:[self openItemForRecord:record]];
 	return res;
 }
 
@@ -645,17 +727,30 @@ static NSDictionary* globs_for_path (std::string const& path)
 // = Action Method =
 // =================
 
-- (void)accept:(id)sender
+- (void)learnAbbreviationForRecord:(FileChooserItem*)record
 {
-	if(OakNotEmptyString(_filterString))
+	if(OakNotEmptyString(_filterString) && !record.isDirectoryMatched && record.document.path)
+		[[OakAbbreviations abbreviationsForName:@"OakFileChooserBindings"] learnAbbreviation:_filterString forString:record.document.path];
+}
+
+- (void)learnSelectionAtPath:(NSString*)path
+{
+	if(!path)
+		return;
+	for(FileChooserItem* record in _records)
 	{
-		for(FileChooserItem* item in [self.items objectsAtIndexes:self.tableView.selectedRowIndexes])
+		if([record.document.path isEqualToString:path])
 		{
-			if(!item.isDirectoryMatched && item.document.path)
-				[[OakAbbreviations abbreviationsForName:@"OakFileChooserBindings"] learnAbbreviation:_filterString forString:item.document.path];
+			[self learnAbbreviationForRecord:record];
+			break;
 		}
 	}
+}
 
+- (void)accept:(id)sender
+{
+	for(FileChooserItem* record in [self.items objectsAtIndexes:self.tableView.selectedRowIndexes])
+		[self learnAbbreviationForRecord:record];
 	[super accept:sender];
 }
 

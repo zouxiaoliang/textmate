@@ -82,6 +82,7 @@ static void* kObjectValueURLObserverContext = &kObjectValueURLObserverContext;
 {
 	if((self = [super initWithFrame:NSZeroRect]))
 	{
+		self.clipsToBounds = YES;
 		_openButton = [[NSButton alloc] initWithFrame:NSZeroRect];
 		_openButton.refusesFirstResponder = YES;
 		_openButton.buttonType            = NSButtonTypeMomentaryChange;
@@ -114,8 +115,10 @@ static void* kObjectValueURLObserverContext = &kObjectValueURLObserverContext;
 
 		[textField setContentHuggingPriority:NSLayoutPriorityDefaultLow-1 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+		NSLayoutConstraint* trailing = [stackView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8];
+		trailing.priority = NSLayoutPriorityRequired - 1;
 		[stackView.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor].active = YES;
-		[stackView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8].active = YES;
+		trailing.active = YES;
 		[stackView.topAnchor      constraintEqualToAnchor:self.topAnchor      constant: 0].active = YES;
 		[stackView.bottomAnchor   constraintEqualToAnchor:self.bottomAnchor   constant: 0].active = YES;
 

@@ -1,8 +1,11 @@
 #import <Cocoa/Cocoa.h>
 
+@class GitEditorTheme;
+
 @interface GitWorkspaceReviewPane : NSViewController
 - (instancetype)initWithPullRequests:(BOOL)pullRequests;
 @property (nonatomic) BOOL softWrap;
+@property (nonatomic) GitEditorTheme* editorTheme;
 @property (nonatomic, copy) NSString* repository;
 @property (nonatomic, copy) NSString* filter;
 @property (nonatomic, copy) void (^showHistory)(NSString* ref);
